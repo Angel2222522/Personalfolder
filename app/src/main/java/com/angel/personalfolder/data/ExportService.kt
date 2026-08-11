@@ -161,7 +161,7 @@ class ExportService(private val context: Context) {
             val contentObject = pageObject + 2
             val jpeg = ByteArrayOutputStream()
             require(bitmap.compress(Bitmap.CompressFormat.JPEG, 88, jpeg)) { "Δεν ήταν δυνατή η συμπίεση σελίδας PDF." }
-            require(jpeg.size <= MAX_PAGE_BYTES) { "Μία σελίδα είναι υπερβολικά μεγάλη για εξαγωγή PDF." }
+            require(jpeg.size() <= MAX_PAGE_BYTES) { "Μία σελίδα είναι υπερβολικά μεγάλη για εξαγωγή PDF." }
             val scale = min(PDF_WIDTH / bitmap.width.toFloat(), PDF_HEIGHT / bitmap.height.toFloat())
             val width = bitmap.width * scale
             val height = bitmap.height * scale
@@ -173,7 +173,7 @@ class ExportService(private val context: Context) {
                     "/Resources << /XObject << /Im0 $imageObject 0 R >> >> /Contents $contentObject 0 R >>"
             )
             offsets[imageObject] = out.count
-            writeAscii("$imageObject 0 obj\n<< /Type /XObject /Subtype /Image /Width ${bitmap.width} /Height ${bitmap.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.size} >>\nstream\n")
+            writeAscii("$imageObject 0 obj\n<< /Type /XObject /Subtype /Image /Width ${bitmap.width} /Height ${bitmap.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.size()} >>\nstream\n")
             out.write(jpeg.toByteArray())
             writeAscii("\nendstream\nendobj\n")
             val content = "q\n${format(width)} 0 0 ${format(height)} ${format(x)} ${format(y)} cm\n/Im0 Do\nQ\n"

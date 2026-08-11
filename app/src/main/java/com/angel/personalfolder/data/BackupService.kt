@@ -60,7 +60,7 @@ class BackupService(private val context: Context) {
     }
 
     suspend fun create(destination: Uri, password: String) = withContext(Dispatchers.IO) {
-        require(password.length >= 8) { "Ο κωδικός πρέπει να έχει τουλάχιστον 8 χαρακτήρες." }
+        require(password.length >= MIN_NEW_BACKUP_PASSWORD_LENGTH) { "Ο νέος κωδικός backup πρέπει να έχει τουλάχιστον $MIN_NEW_BACKUP_PASSWORD_LENGTH χαρακτήρες." }
         val zip = context.cacheDir.resolve("backup/personal_folder_${System.currentTimeMillis()}.zip").apply {
             parentFile?.mkdirs()
         }
@@ -94,7 +94,7 @@ class BackupService(private val context: Context) {
     }
 
     suspend fun restore(source: Uri, password: String) = withContext(Dispatchers.IO) {
-        require(password.length >= 8) { "Ο κωδικός πρέπει να έχει τουλάχιστον 8 χαρακτήρες." }
+        require(password.length >= MIN_RESTORE_PASSWORD_LENGTH) { "Ο κωδικός επαναφοράς πρέπει να έχει τουλάχιστον $MIN_RESTORE_PASSWORD_LENGTH χαρακτήρες." }
         restoreMutex.withLock {
             WorkManager.getInstance(context).cancelAllWorkByTag("document-processing")
             OcrWorker.awaitIdle()
@@ -216,10 +216,10 @@ class BackupService(private val context: Context) {
                             }
                         })
                         database.caseDao().insertAll(cases)
-                        relations.forEach(database.caseDocumentDao()::insert)
-                        events.forEach(database.timelineDao()::insert)
-                        checklist.forEach(database.checklistDao()::insert)
-                        reminders.forEach(database.reminderDao()::insert)
+                        relations.forEach { database.caseDocumentDao().insert(it) }
+                        events.forEach { database.timelineDao().insert(it) }
+                        checklist.forEach { database.checklistDao().insert(it) }
+                        reminders.forEach { database.reminderDao().insert(it) }
                     }
                     writeRestoreJournal("database_committed", root, previousRoot, stagingRoot, documentIds)
                 } catch (error: Throwable) {
@@ -506,6 +506,8 @@ class BackupService(private val context: Context) {
         const val MAX_MANIFEST_BYTES = 16L * 1024 * 1024
         const val MAX_OCR_TEXT = 2_000_000
         const val MAX_METADATA_JSON = 200_000
+        const val MIN_NEW_BACKUP_PASSWORD_LENGTH = 12
+        const val MIN_RESTORE_PASSWORD_LENGTH = 8
         const val RESTORE_JOURNAL = "restore_journal.json"
         const val MAX_RESTORED_PAGES = 1_000
         const val MAX_RESTORED_REMINDERS = 5_000
