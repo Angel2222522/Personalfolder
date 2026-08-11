@@ -76,7 +76,8 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         File(cacheDir, "share").deleteRecursively()
-        handleIncomingIntent(intent)
+        File(cacheDir, "camera").deleteRecursively()
+        if (savedInstanceState == null) handleIncomingIntent(intent)
         setContent {
             PersonalFolderTheme {
                 FolderApp(
@@ -107,6 +108,12 @@ class MainActivity : FragmentActivity() {
         sessionUnlocked = false
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
     private fun takePhoto() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera()
         else cameraPermission.launch(Manifest.permission.CAMERA)
@@ -126,8 +133,12 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun handleIncomingIntent(incoming: Intent?) {
-        val uri = incoming?.data ?: incoming?.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
-        if (incoming?.action == Intent.ACTION_SEND && uri != null) viewModel.importUris(listOf(uri))
+        val uris = when (incoming?.action) {
+            Intent.ACTION_SEND -> listOfNotNull(incoming.data ?: incoming.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+            Intent.ACTION_SEND_MULTIPLE -> incoming.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+            else -> emptyList()
+        }
+        if (uris.isNotEmpty()) viewModel.importUris(uris)
     }
 
     private fun openDocument(documentId: String) {
