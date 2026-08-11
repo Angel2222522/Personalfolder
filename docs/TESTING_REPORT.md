@@ -26,4 +26,4 @@ The presence of a passing compile or lint run is not treated as proof of those f
 
 ## Latest remote verification
 
-Run 27 (`31522474942`) passed unit tests, lint, instrumentation compilation, debug APK build, release build verification and artifact publication for commit `24af72269e2c5588fa63d3ce247a73080a15a830`. A later hardening/docs commit requires the final CI run to be recorded before release handoff.
+Run 29 (`31523947009`) passed unit tests, lint, instrumentation compilation, debug APK build, release build verification and artifact publication for commit `18487d173f8af938dc62c41e88302a7119abbc79`. The published debug APK artifact is `9114272155`; release verification artifact is `9114273533`; Room schemas artifact is `9114274107`.
