@@ -18,7 +18,7 @@ data class ExtractedMetadata(
 object MetadataExtractor {
     private val dateRegex = Regex("""\b(\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})\b""")
     private val protocolRegex = Regex(
-        """(?i)(?:αριθ(?:μός|μο)?\s*(?:πρωτοκόλλου|αίτησης)?|αρ\.?\s*πρωτ(?:οκ)?|protocol|application)\s*[:#№-]?\s*([A-ZΑ-Ω0-9][A-ZΑ-Ω0-9./_-]{2,})"""
+        """(?:αριθ(?:μος|μο)?\s*(?:πρωτοκολλου|αιτησης)?|αρ\.?\s*πρωτ(?:οκ)?|protocol|application)\s*[:#№-]?\s*([a-zα-ω0-9][a-zα-ω0-9./_-]{2,})"""
     )
 
     private val categoryRules = linkedMapOf(
@@ -52,7 +52,7 @@ object MetadataExtractor {
             listOf("λήξ", "έως", "μέχρι", "ισχύει", "expiry", "valid").any(context::contains)
         } ?: dates.lastOrNull()
         val issued = dates.firstOrNull { it != expiry }
-        val protocol = protocolRegex.find(normalized)?.groupValues?.getOrNull(1)
+        val protocol = protocolRegex.find(folded)?.groupValues?.getOrNull(1)
         val keywords = categoryRules.flatMap { (key, words) ->
             if (folded.contains(foldGreek(key))) listOf(key) else words.filter { folded.contains(foldGreek(it)) }
         }.distinct().take(12)
