@@ -109,6 +109,7 @@ fun FolderApp(
     onCreateBackup: (String) -> Unit,
     onRestoreBackup: (String) -> Unit,
     onRequestNotifications: () -> Unit,
+    onExportDocuments: (List<String>) -> Unit,
     lockEnabled: Boolean
 ) {
     val documents by viewModel.documents.collectAsStateWithLifecycle()
@@ -172,7 +173,7 @@ fun FolderApp(
                     if (caseEntity != null) CaseDetailScreen(caseEntity, documents, viewModel, onOpenDocument)
                 }
                 section == MainSection.HOME.name -> HomeScreen(documents, cases, reminders, onImport, onCamera, { section = MainSection.DOCUMENTS.name }, { section = MainSection.CASES.name }, { selectedDocumentId = it }, { selectedCaseId = it }, viewModel::markReminderDone)
-                section == MainSection.DOCUMENTS.name -> DocumentsScreen(documents, query, busy, viewModel::setQuery, { selectedDocumentId = it }, onImport)
+                section == MainSection.DOCUMENTS.name -> DocumentsScreen(documents, query, busy, viewModel::setQuery, { selectedDocumentId = it }, onImport, onExportDocuments)
                 section == MainSection.CASES.name -> CasesScreen(cases, { selectedCaseId = it }, { showCreateCase = true })
                 else -> SettingsScreen(lockEnabled, onEnableLock, onDisableLock, onRequestNotifications, onBackup = { backupAction = "create" }, onRestore = { backupAction = "restore" })
             }
@@ -272,16 +273,32 @@ private fun DocumentsScreen(
     busy: Boolean,
     onQuery: (String) -> Unit,
     onDocument: (String) -> Unit,
-    onImport: () -> Unit
+    onImport: () -> Unit,
+    onExportDocuments: (List<String>) -> Unit
 ) {
+    var selectedIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         OutlinedTextField(value = query, onValueChange = onQuery, modifier = Modifier.fillMaxWidth().padding(top = 12.dp), placeholder = { Text("Αναζήτηση σε τίτλους, OCR και στοιχεία") }, leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true, trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { onQuery("") }) { Text("Καθαρισμός") } })
+        if (selectedIds.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Επιλεγμένα: ${selectedIds.size}", modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                OutlinedButton(onClick = { onExportDocuments(selectedIds.toList()) }) { Text("Εξαγωγή ZIP") }
+                TextButton(onClick = { selectedIds = emptySet() }) { Text("Καθαρισμός") }
+            }
+        }
         if (busy) LinearProcessing()
         if (documents.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState(if (query.isBlank()) "Δεν έχεις προσθέσει ακόμη έγγραφα." else "Δεν βρέθηκαν αποτελέσματα.", Icons.Default.Search) }
         } else {
             LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(documents, key = { it.id }) { document -> DocumentCard(document) { onDocument(document.id) } }
+                items(documents, key = { it.id }) { document ->
+                    DocumentCard(
+                        document = document,
+                        onClick = { onDocument(document.id) },
+                        selected = document.id in selectedIds,
+                        onToggleSelection = { selectedIds = if (document.id in selectedIds) selectedIds - document.id else selectedIds + document.id }
+                    )
+                }
             }
         }
     }
@@ -433,7 +450,7 @@ private fun QuickAction(modifier: Modifier, icon: androidx.compose.ui.graphics.v
 private fun SectionHeader(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) { Row(Modifier.fillMaxWidth().clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(8.dp)); Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)); Icon(Icons.Default.ArrowForward, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) } }
 
 @Composable
-private fun DocumentCard(document: DocumentEntity, onClick: () -> Unit) { Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Surface(Modifier.size(44.dp), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Description, null, tint = MaterialTheme.colorScheme.onPrimaryContainer) } }; Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(document.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(document.category, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp); if (document.processingState == ProcessingState.PROCESSING) Text("Γίνεται επεξεργασία…", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp) }; document.expiryDate?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) } } } }
+private fun DocumentCard(document: DocumentEntity, onClick: () -> Unit, selected: Boolean = false, onToggleSelection: (() -> Unit)? = null) { Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Surface(Modifier.size(44.dp), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Description, null, tint = MaterialTheme.colorScheme.onPrimaryContainer) } }; Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(document.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(document.category, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp); if (document.processingState == ProcessingState.PROCESSING) Text("Γίνεται επεξεργασία…", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp) }; document.expiryDate?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }; onToggleSelection?.let { toggle -> androidx.compose.material3.Checkbox(checked = selected, onCheckedChange = { toggle() }) } } } }
 
 @Composable
 private fun CaseCard(caseEntity: CaseEntity, onClick: () -> Unit) { Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Assignment, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(caseEntity.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(caseEntity.nextStep.ifBlank { caseEntity.description.ifBlank { "Χωρίς επόμενο βήμα" } }, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }; AssistChip(onClick = {}, label = { Text(caseEntity.status, fontSize = 11.sp) }) } } }

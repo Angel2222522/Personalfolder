@@ -9,6 +9,7 @@ import com.angel.personalfolder.data.CaseStatus
 import com.angel.personalfolder.data.ChecklistItemEntity
 import com.angel.personalfolder.data.DocumentEntity
 import com.angel.personalfolder.data.BackupService
+import com.angel.personalfolder.data.ExportService
 import com.angel.personalfolder.data.FolderRepository
 import com.angel.personalfolder.data.TimelineEventEntity
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -24,6 +25,7 @@ import kotlinx.coroutines.launch
 class FolderViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = FolderRepository(application)
     private val backupService = BackupService(application)
+    private val exportService = ExportService(application)
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
     val documents: StateFlow<List<DocumentEntity>> = _query
@@ -115,6 +117,14 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
         runCatching { backupService.restore(source, password) }
             .onSuccess { _message.emit("Η επαναφορά ολοκληρώθηκε.") }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η επαναφορά του αντιγράφου.") }
+        _busy.value = false
+    }
+
+    fun exportDocuments(destination: Uri, documentIds: List<String>) = viewModelScope.launch {
+        _busy.value = true
+        runCatching { exportService.exportDocuments(destination, documentIds) }
+            .onSuccess { _message.emit("Η εξαγωγή ZIP ολοκληρώθηκε. Το αρχείο δεν είναι κρυπτογραφημένο.") }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η εξαγωγή.") }
         _busy.value = false
     }
 

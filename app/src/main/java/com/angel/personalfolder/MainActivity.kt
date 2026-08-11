@@ -30,6 +30,7 @@ class MainActivity : FragmentActivity() {
     private var sessionUnlocked = false
     private var lockPromptVisible = false
     private var pendingBackupPassword: String? = null
+    private var pendingExportDocumentIds: List<String> = emptyList()
     private val biometricExecutor: Executor by lazy { ContextCompat.getMainExecutor(this) }
 
     private val documentPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -66,6 +67,12 @@ class MainActivity : FragmentActivity() {
         if (uri != null && password != null) viewModel.restoreBackup(uri, password)
     }
 
+    private val exportCreator = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val documentIds = pendingExportDocumentIds
+        pendingExportDocumentIds = emptyList()
+        if (uri != null && documentIds.isNotEmpty()) viewModel.exportDocuments(uri, documentIds)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         File(cacheDir, "share").deleteRecursively()
@@ -83,6 +90,7 @@ class MainActivity : FragmentActivity() {
                     onCreateBackup = { password -> pendingBackupPassword = password; backupCreator.launch("personal-folder-backup.pfb") },
                     onRestoreBackup = { password -> pendingBackupPassword = password; backupPicker.launch(arrayOf("application/octet-stream", "application/zip", "*/*")) },
                     onRequestNotifications = ::requestNotificationPermission,
+                    onExportDocuments = { documentIds -> pendingExportDocumentIds = documentIds; exportCreator.launch("personal-folder-export.zip") },
                     lockEnabled = settings.getBoolean(KEY_LOCK, false)
                 )
             }
