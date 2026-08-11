@@ -1,0 +1,42 @@
+package com.angel.personalfolder.workers
+
+import android.Manifest
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import androidx.work.CoroutineWorker
+import androidx.work.WorkerParameters
+import com.angel.personalfolder.MainActivity
+import com.angel.personalfolder.R
+import com.angel.personalfolder.data.AppDatabase
+
+class ReminderWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
+    override suspend fun doWork(): Result {
+        val id = inputData.getString(KEY_REMINDER_ID) ?: return Result.failure()
+        val reminder = AppDatabase.get(applicationContext).reminderDao().getAll().firstOrNull { it.id == id }
+            ?: return Result.success()
+        if (reminder.isDone) return Result.success()
+        if (ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            return Result.success()
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            applicationContext, id.hashCode(), Intent(applicationContext, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(applicationContext, "document_reminders")
+            .setSmallIcon(R.drawable.ic_launcher)
+            .setContentTitle(applicationContext.getString(R.string.app_name))
+            .setContentText(reminder.title)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(applicationContext).notify(id.hashCode(), notification)
+        return Result.success()
+    }
+
+    companion object { const val KEY_REMINDER_ID = "reminder_id" }
+}
