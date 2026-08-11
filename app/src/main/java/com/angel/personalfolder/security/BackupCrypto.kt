@@ -23,29 +23,42 @@ object BackupCrypto {
     private const val ITERATIONS = 120_000
 
     fun encryptFile(input: File, context: Context, destination: Uri, password: CharArray) {
-        val salt = ByteArray(SALT_SIZE).also(SecureRandom()::nextBytes)
-        val iv = ByteArray(IV_SIZE).also(SecureRandom()::nextBytes)
-        val key = key(password, salt)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, iv)) }
-        context.contentResolver.openOutputStream(destination, "w")?.use { output ->
-            writeHeader(output, salt, iv)
-            CipherOutputStream(output, cipher).use { encrypted -> FileInputStream(input).use { it.copyTo(encrypted) } }
-        } ?: error("Δεν ήταν δυνατή η δημιουργία του αντιγράφου.")
+        try {
+            val salt = ByteArray(SALT_SIZE).also(SecureRandom()::nextBytes)
+            val iv = ByteArray(IV_SIZE).also(SecureRandom()::nextBytes)
+            val key = key(password, salt)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, iv)) }
+            context.contentResolver.openOutputStream(destination, "w")?.use { output ->
+                writeHeader(output, salt, iv)
+                CipherOutputStream(output, cipher).use { encrypted -> FileInputStream(input).use { it.copyTo(encrypted) } }
+            } ?: error("Δεν ήταν δυνατή η δημιουργία του αντιγράφου.")
+        } finally {
+            password.fill('\u0000')
+        }
     }
 
-    fun decryptToFile(context: Context, source: Uri, destination: File, password: CharArray) {
-        context.contentResolver.openInputStream(source)?.use { input ->
-            val salt = ByteArray(SALT_SIZE)
-            val iv = ByteArray(IV_SIZE)
-            val magic = ByteArray(MAGIC.size)
-            input.readFully(magic)
-            require(magic.contentEquals(MAGIC)) { "Δεν αναγνωρίζεται το αρχείο αντιγράφου." }
-            input.readFully(salt)
-            input.readFully(iv)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key(password, salt), GCMParameterSpec(128, iv)) }
-            destination.parentFile?.mkdirs()
-            CipherInputStream(input, cipher).use { decrypted -> FileOutputStream(destination).use { decrypted.copyTo(it) } }
-        } ?: error("Δεν ήταν δυνατή η ανάγνωση του αντιγράφου.")
+    fun decryptToFile(context: Context, source: Uri, destination: File, password: CharArray, maxBytes: Long = MAX_DECRYPTED_BYTES) {
+        val temporary = File(destination.parentFile ?: destination.absoluteFile.parentFile!!, ".${destination.name}.${System.nanoTime()}.part")
+        try {
+            context.contentResolver.openInputStream(source)?.use { input ->
+                val salt = ByteArray(SALT_SIZE)
+                val iv = ByteArray(IV_SIZE)
+                val magic = ByteArray(MAGIC.size)
+                input.readFully(magic)
+                require(magic.contentEquals(MAGIC)) { "Δεν αναγνωρίζεται το αρχείο αντιγράφου." }
+                input.readFully(salt)
+                input.readFully(iv)
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key(password, salt), GCMParameterSpec(128, iv)) }
+                temporary.parentFile?.mkdirs()
+                CipherInputStream(input, cipher).use { decrypted ->
+                    FileOutputStream(temporary).use { output -> decrypted.copyLimitedTo(output, maxBytes) }
+                }
+            } ?: error("Δεν ήταν δυνατή η ανάγνωση του αντιγράφου.")
+            require(temporary.renameTo(destination)) { "Δεν ήταν δυνατή η ολοκλήρωση του αντιγράφου." }
+        } finally {
+            temporary.delete()
+            password.fill('\u0000')
+        }
     }
 
     private fun writeHeader(output: OutputStream, salt: ByteArray, iv: ByteArray) {
@@ -71,4 +84,18 @@ object BackupCrypto {
             offset += count
         }
     }
+
+    private fun InputStream.copyLimitedTo(output: OutputStream, maxBytes: Long) {
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var total = 0L
+        while (true) {
+            val read = read(buffer)
+            if (read < 0) break
+            total += read
+            require(total <= maxBytes) { "Το αντίγραφο είναι υπερβολικά μεγάλο." }
+            output.write(buffer, 0, read)
+        }
+    }
+
+    private const val MAX_DECRYPTED_BYTES = 512L * 1024 * 1024 + 16L * 1024 * 1024
 }

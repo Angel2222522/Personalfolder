@@ -34,4 +34,31 @@ class MetadataExtractorTest {
         assertEquals("αβ-123", result.protocolNumber)
         assertTrue(result.json.contains("\\\"δοκιμή\\\""))
     }
+
+    @Test
+    fun scoresDateContextUsingOriginalTextPositions() {
+        val result = MetadataExtractor.extract(
+            "Ημερομηνία έκδοσης: 01/02/2024\nΤο έγγραφο ισχύει έως: 15-03-2025",
+            "Έγγραφο"
+        )
+        assertEquals("2024-02-01", result.issuedDate)
+        assertEquals("2025-03-15", result.expiryDate)
+        assertEquals("high", result.issuedConfidence)
+        assertEquals("high", result.expiryConfidence)
+    }
+
+    @Test
+    fun doesNotInventExpiryFromOneUnlabelledDate() {
+        val result = MetadataExtractor.extract("Αριθμός αίτησης 12345\n03/08/2026", "Έγγραφο")
+        assertEquals(null, result.expiryDate)
+        assertEquals("low", result.issuedConfidence)
+        assertTrue(result.json.contains("\"expiryConfidence\":\"none\""))
+    }
+
+    @Test
+    fun marksLastDateFallbackAsLowConfidence() {
+        val result = MetadataExtractor.extract("Εκδόθηκε 01/01/2024\nΑναφορά 02/02/2025", "Έγγραφο")
+        assertEquals("2025-02-02", result.expiryDate)
+        assertEquals("low", result.expiryConfidence)
+    }
 }

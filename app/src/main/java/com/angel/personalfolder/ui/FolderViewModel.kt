@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
@@ -28,8 +29,19 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     private val exportService = ExportService(application)
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
-    val documents: StateFlow<List<DocumentEntity>> = _query
-        .flatMapLatest(repository::documents)
+    private val _category = MutableStateFlow("")
+    private val _processingState = MutableStateFlow("")
+    private val _caseId = MutableStateFlow<String?>(null)
+    private val _expiringSoon = MutableStateFlow(false)
+    val category: StateFlow<String> = _category.asStateFlow()
+    val processingState: StateFlow<String> = _processingState.asStateFlow()
+    val caseId: StateFlow<String?> = _caseId.asStateFlow()
+    val expiringSoon: StateFlow<Boolean> = _expiringSoon.asStateFlow()
+    val documents: StateFlow<List<DocumentEntity>> = combine(_query, _category, _processingState, _caseId, _expiringSoon) { query, category, state, caseId, expiring ->
+        DocumentFilters(query, category, state, caseId, expiring)
+    }.flatMapLatest { filters ->
+        repository.documents(filters.query, filters.category, filters.processingState, filters.caseId, filters.expiringSoon)
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val cases: StateFlow<List<CaseEntity>> = repository.cases()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -41,6 +53,10 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     val messages = _message.asSharedFlow()
 
     fun setQuery(value: String) { _query.value = value }
+    fun setCategory(value: String) { _category.value = value }
+    fun setProcessingState(value: String) { _processingState.value = value }
+    fun setCaseFilter(value: String?) { _caseId.value = value }
+    fun setExpiringSoon(value: Boolean) { _expiringSoon.value = value }
 
     fun importUris(uris: List<Uri>, onFinished: () -> Unit = {}) = viewModelScope.launch {
         _busy.value = true
@@ -53,9 +69,15 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
 
     suspend fun getDocument(id: String): DocumentEntity? = repository.document(id)
 
-    fun updateDocument(id: String, title: String, category: String, tags: String, expiryDate: String?) = viewModelScope.launch {
-        runCatching { repository.updateDocumentBasics(id, title, category, tags, expiryDate) }
+    fun updateDocument(id: String, title: String, category: String, tags: String, provider: String, issuedDate: String?, expiryDate: String?, protocolNumber: String?) = viewModelScope.launch {
+        runCatching { repository.updateDocumentMetadata(id, title, category, tags, provider, issuedDate, expiryDate, protocolNumber) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αποθήκευση.") }
+    }
+
+    fun rerunOcr(id: String) = viewModelScope.launch {
+        runCatching { repository.retryOcr(id) }
+            .onSuccess { _message.emit("Η επεξεργασία OCR ξεκίνησε ξανά.") }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η επανάληψη OCR.") }
     }
 
     fun deleteDocument(id: String) = viewModelScope.launch {
@@ -70,6 +92,22 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η δημιουργία υπόθεσης.") }
     }
 
+    fun createCase(title: String, description: String, startDate: String?, deadline: String?, nextStep: String, notes: String) = viewModelScope.launch {
+        runCatching { repository.createCase(title, description, startDate, deadline, nextStep, notes) }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η δημιουργία υπόθεσης.") }
+    }
+
+    fun updateCase(id: String, title: String, description: String, status: String, startDate: String?, deadline: String?, nextStep: String, notes: String) = viewModelScope.launch {
+        runCatching { repository.updateCase(id, title, description, status, startDate, deadline, nextStep, notes) }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αποθήκευση της υπόθεσης.") }
+    }
+
+    fun deleteCase(id: String) = viewModelScope.launch {
+        runCatching { repository.deleteCase(id) }
+            .onSuccess { _message.emit("Η υπόθεση διαγράφηκε.") }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η διαγραφή της υπόθεσης.") }
+    }
+
     fun updateCaseStatus(id: String, status: String) = viewModelScope.launch {
         repository.updateCaseStatus(id, status)
     }
@@ -82,9 +120,21 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
         if (title.isNotBlank()) repository.addChecklistItem(caseId, title)
     }
 
+    fun addChecklistItem(caseId: String, title: String, linkedDocumentId: String?) = viewModelScope.launch {
+        if (title.isNotBlank()) runCatching { repository.addChecklistItem(caseId, title, linkedDocumentId) }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η προσθήκη.") }
+    }
+
     fun setChecklistComplete(item: ChecklistItemEntity, complete: Boolean) = viewModelScope.launch {
         repository.setChecklistComplete(item.id, complete)
     }
+
+    fun linkChecklistDocument(item: ChecklistItemEntity, documentId: String?) = viewModelScope.launch {
+        runCatching { repository.linkChecklistDocument(item.id, documentId) }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η σύνδεση.") }
+    }
+
+    fun deleteChecklistItem(item: ChecklistItemEntity) = viewModelScope.launch { repository.deleteChecklistItem(item.id) }
 
     fun timeline(caseId: String) = repository.timeline(caseId)
     fun checklist(caseId: String) = repository.checklist(caseId)
@@ -101,6 +151,8 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     fun markReminderDone(id: String) = viewModelScope.launch {
         repository.markReminderDone(id)
     }
+
+    fun reportError(message: String) { _message.tryEmit(message) }
 
     fun clearSearch() { _query.value = "" }
 
@@ -131,7 +183,7 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     fun exportPdf(destination: Uri, documentIds: List<String>) = viewModelScope.launch {
         _busy.value = true
         runCatching { exportService.exportPdf(destination, documentIds) }
-            .onSuccess { _message.emit("Το ενιαίο PDF δημιουργήθηκε.") }
+            .onSuccess { _message.emit("Το ενιαίο PDF δημιουργήθηκε. Το αρχείο δεν είναι κρυπτογραφημένο.") }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η δημιουργία PDF.") }
         _busy.value = false
     }
@@ -142,4 +194,12 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
             CaseStatus.ACTION, CaseStatus.COMPLETED, CaseStatus.ARCHIVED
         )
     }
+
+    private data class DocumentFilters(
+        val query: String,
+        val category: String,
+        val processingState: String,
+        val caseId: String?,
+        val expiringSoon: Boolean
+    )
 }

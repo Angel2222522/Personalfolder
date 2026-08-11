@@ -17,7 +17,7 @@ import com.angel.personalfolder.data.AppDatabase
 class ReminderWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val id = inputData.getString(KEY_REMINDER_ID) ?: return Result.failure()
-        val reminder = AppDatabase.get(applicationContext).reminderDao().getAll().firstOrNull { it.id == id }
+        val reminder = AppDatabase.get(applicationContext).reminderDao().getById(id)
             ?: return Result.success()
         if (reminder.isDone) return Result.success()
         if (ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -30,8 +30,11 @@ class ReminderWorker(appContext: Context, params: WorkerParameters) : CoroutineW
         val notification = NotificationCompat.Builder(applicationContext, "document_reminders")
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(applicationContext.getString(R.string.app_name))
-            .setContentText(reminder.title)
+            // Reminder titles may contain names of documents, authorities or cases.
+            // Keep notification surfaces generic even when the app is currently unlocked.
+            .setContentText("Έχεις μια υπενθύμιση για έγγραφο ή υπόθεση.")
             .setContentIntent(pendingIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setAutoCancel(true)
             .build()
         NotificationManagerCompat.from(applicationContext).notify(id.hashCode(), notification)

@@ -12,11 +12,13 @@ data class ExtractedMetadata(
     val expiryDate: String?,
     val protocolNumber: String?,
     val keywords: List<String>,
+    val issuedConfidence: String = "low",
+    val expiryConfidence: String = "low",
     val json: String
 )
 
 object MetadataExtractor {
-    private val dateRegex = Regex("""\b(\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})\b""")
+    private val dateRegex = Regex("""(?<!\d)(\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})(?!\d)""")
     private val protocolRegex = Regex(
         """(?:αριθ(?:μος|μο)?\s*(?:πρωτοκολλου|αιτησης)?|αρ\.?\s*πρωτ(?:οκ)?|protocol|application)\s*[:#№-]?\s*([a-zα-ω0-9][a-zα-ω0-9./_-]{2,})"""
     )
@@ -33,7 +35,7 @@ object MetadataExtractor {
 
     fun extract(text: String, fallbackTitle: String): ExtractedMetadata {
         val normalized = text.replace("\u0000", " ").trim()
-        val lines = normalized.lines().map { it.trim() }.filter { it.length >= 3 }
+        val lines = normalized.lines().map(String::trim).filter { it.length >= 3 }
         val title = lines.firstOrNull()?.take(100)?.ifBlank { fallbackTitle } ?: fallbackTitle
         val folded = foldGreek(normalized)
         val category = categoryRules.entries.firstOrNull { (_, words) -> words.any { folded.contains(foldGreek(it)) } }?.key
@@ -42,17 +44,38 @@ object MetadataExtractor {
             val value = foldGreek(line)
             listOf("υπουργ", "δημ", "ααδε", "gov", "δεη", "τραπεζ", "οργανισμ").any(value::contains)
         }?.take(120).orEmpty()
-        val dates = dateRegex.findAll(normalized).mapNotNull { normalizeDate(it.value) }.distinct().toList()
-        val expiry = dates.firstOrNull { date ->
-            val index = normalized.indexOf(date)
-            val context = normalized.substring(
-                (index - 50).coerceAtLeast(0),
-                (index + date.length + 50).coerceAtMost(normalized.length)
-            ).lowercase()
-            listOf("λήξ", "έως", "μέχρι", "ισχύει", "expiry", "valid").any(context::contains)
-        } ?: dates.lastOrNull()
-        val issued = dates.firstOrNull { it != expiry }
-        val protocol = protocolRegex.find(folded)?.groupValues?.getOrNull(1)
+
+        val dateMatches = dateRegex.findAll(normalized).mapNotNull { match ->
+            normalizeDate(match.value)?.let { canonical ->
+                DateMatch(canonical, match.range, contextAround(normalized, match.range))
+            }
+        }.toList()
+        val expiryCandidate = dateMatches
+            .map { it to expiryScore(it.context) }
+            .filter { it.second > 0 }
+            .maxWithOrNull(compareBy<Pair<DateMatch, Int>> { it.second }.thenBy { it.first.range.first })
+        val issuedCandidate = dateMatches
+            .map { it to issuedScore(it.context) }
+            .filter { it.second > 0 }
+            .maxWithOrNull(compareBy<Pair<DateMatch, Int>> { it.second }.thenBy { -it.first.range.first })
+
+        val expiry = expiryCandidate?.first?.canonical
+            ?: if (expiryCandidate == null && dateMatches.size >= 2) dateMatches.last().canonical else null
+        val expiryConfidence = when {
+            expiryCandidate != null && expiryCandidate.second >= 3 -> "high"
+            expiryCandidate != null -> "medium"
+            expiry != null -> "low"
+            else -> "none"
+        }
+        val issued = issuedCandidate?.first?.canonical
+            ?: dateMatches.firstOrNull { it.canonical != expiry }?.canonical
+        val issuedConfidence = when {
+            issuedCandidate != null && issuedCandidate.second >= 3 -> "high"
+            issuedCandidate != null -> "medium"
+            issued != null -> "low"
+            else -> "none"
+        }
+        val protocol = protocolRegex.find(folded)?.groupValues?.getOrNull(1)?.take(120)
         val keywords = categoryRules.flatMap { (key, words) ->
             if (folded.contains(foldGreek(key))) listOf(key) else words.filter { folded.contains(foldGreek(it)) }
         }.distinct().take(12)
@@ -65,11 +88,36 @@ object MetadataExtractor {
             append("\"expiryDate\":").append(jsonValue(expiry)).append(',')
             append("\"protocolNumber\":").append(jsonValue(protocol)).append(',')
             append("\"keywords\":\"").append(jsonEscape(keywords.joinToString(","))).append("\",")
+            append("\"issuedConfidence\":\"").append(issuedConfidence).append("\",")
+            append("\"expiryConfidence\":\"").append(expiryConfidence).append("\",")
             append("\"confidence\":\"suggested\"")
             append('}')
         }
-        return ExtractedMetadata(title, category, provider, issued, expiry, protocol, keywords, json)
+        return ExtractedMetadata(title, category, provider, issued, expiry, protocol, keywords, issuedConfidence, expiryConfidence, json)
     }
+
+    private fun expiryScore(context: String): Int {
+        val value = foldGreek(context)
+        return when {
+            listOf("ημερομηνια ληξης", "ημ ληξης", "expiry", "expires", "expiration").any(value::contains) -> 4
+            listOf("ληξ", "εως", "μεχρι", "ισχυει", "valid until", "valid").any(value::contains) -> 3
+            else -> 0
+        }
+    }
+
+    private fun issuedScore(context: String): Int {
+        val value = foldGreek(context)
+        return when {
+            listOf("ημερομηνια εκδοσης", "ημ εκδοσης", "issued", "issue date").any(value::contains) -> 4
+            listOf("εκδοθ", "εκδοση", "αποφαση", "dated").any(value::contains) -> 3
+            else -> 0
+        }
+    }
+
+    private fun contextAround(text: String, range: IntRange): String = text.substring(
+        (range.first - CONTEXT_RADIUS).coerceAtLeast(0),
+        (range.last + 1 + CONTEXT_RADIUS).coerceAtMost(text.length)
+    )
 
     private fun jsonValue(value: String?): String = value?.let { "\"${jsonEscape(it)}\"" } ?: "null"
 
@@ -86,11 +134,7 @@ object MetadataExtractor {
                 '\t' -> append("\\t")
                 '\b' -> append("\\b")
                 '\u000C' -> append("\\f")
-                else -> if (character.code < 0x20) {
-                    append("\\u%04x".format(Locale.ROOT, character.code))
-                } else {
-                    append(character)
-                }
+                else -> if (character.code < 0x20) append("\\u%04x".format(Locale.ROOT, character.code)) else append(character)
             }
         }
     }
@@ -106,4 +150,8 @@ object MetadataExtractor {
         }
         return null
     }
+
+    private data class DateMatch(val canonical: String, val range: IntRange, val context: String)
+
+    private const val CONTEXT_RADIUS = 80
 }
