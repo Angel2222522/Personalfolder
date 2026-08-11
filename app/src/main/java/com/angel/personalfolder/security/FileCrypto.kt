@@ -39,9 +39,23 @@ object FileCrypto {
     }
 
     fun encryptUri(context: Context, uri: Uri, destination: File): Long {
+        ensureKeyAvailableForNewDocument(context)
         destination.parentFile?.mkdirs()
         return context.contentResolver.openInputStream(uri)?.use { encrypt(it, destination) }
             ?: error("Δεν ήταν δυνατή η ανάγνωση του αρχείου.")
+    }
+
+    /**
+     * A missing Keystore alias is recoverable only before the first encrypted
+     * document exists. Generating a replacement key afterwards would create a
+     * mixed-key library and make the old ciphertext permanently unreadable.
+     */
+    fun ensureKeyAvailableForNewDocument(context: Context) {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        if (keyStore.getKey(KEY_ALIAS, null) is SecretKey) return
+        val documentsRoot = context.filesDir.resolve("documents")
+        if (containsEncryptedFile(documentsRoot)) throw KeyUnavailableException()
+        key()
     }
 
     fun encrypt(input: InputStream, destination: File, maxBytes: Long = MAX_DOCUMENT_BYTES): Long {
@@ -122,6 +136,12 @@ object FileCrypto {
             output.write(buffer, 0, read)
         }
         return total
+    }
+
+    private fun containsEncryptedFile(directory: File): Boolean {
+        return directory.listFiles().orEmpty().any { file ->
+            if (file.isDirectory) containsEncryptedFile(file) else file.isFile && file.name.endsWith(".pf")
+        }
     }
 
     private const val MAX_DOCUMENT_BYTES = 512L * 1024 * 1024

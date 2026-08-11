@@ -141,6 +141,10 @@ class BackupService(private val context: Context) {
         val portableFiles = formatVersion >= 2
         val pageDescriptors = parsePageDescriptors(manifest.optJSONArray("pages"))
         val expectedFiles = pageDescriptors.map { it.entryName }.toSet()
+        // Do not generate a replacement key after a Keystore loss when the
+        // current device still has encrypted library files. A new device with
+        // an empty library may create its first key for portable restore.
+        FileCrypto.ensureKeyAvailableForNewDocument(context)
         val stagingRoot = context.cacheDir.resolve("restore_documents_${UUID.randomUUID()}").apply { mkdirs() }
         val root = context.filesDir.resolve("documents")
         val previousRoot = context.cacheDir.resolve("previous_documents_${UUID.randomUUID()}")

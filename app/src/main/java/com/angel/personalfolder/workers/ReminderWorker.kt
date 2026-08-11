@@ -30,11 +30,9 @@ class ReminderWorker(appContext: Context, params: WorkerParameters) : CoroutineW
         val notification = NotificationCompat.Builder(applicationContext, "document_reminders")
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(applicationContext.getString(R.string.app_name))
-            .setContentText(
-                if (applicationContext.getSharedPreferences("personal_folder_settings", Context.MODE_PRIVATE).getBoolean("biometric_lock", false))
-                    "Έχεις μια υπενθύμιση για έγγραφο ή υπόθεση."
-                else reminder.title
-            )
+            // Reminder titles may contain names of documents, authorities or cases.
+            // Keep notification surfaces generic even when the app is currently unlocked.
+            .setContentText("Έχεις μια υπενθύμιση για έγγραφο ή υπόθεση.")
             .setContentIntent(pendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setAutoCancel(true)
