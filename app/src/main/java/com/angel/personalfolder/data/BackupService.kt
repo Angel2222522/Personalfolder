@@ -103,8 +103,8 @@ class BackupService(private val context: Context) {
         val portableFiles = formatVersion >= 2
 
         val root = File(context.filesDir, "documents")
-        FileCrypto.deleteRecursively(root)
-        root.mkdirs()
+        val stagingRoot = File(context.cacheDir, "restore_documents_${UUID.randomUUID()}").apply { mkdirs() }
+        val previousRoot = File(context.cacheDir, "previous_documents_${UUID.randomUUID()}")
         val documents = mutableListOf<DocumentEntity>()
         val pages = mutableListOf<DocumentPageEntity>()
         val fileMap = mutableMapOf<String, String>()
@@ -115,11 +115,12 @@ class BackupService(private val context: Context) {
             val pageIndex = item.getInt("pageIndex").also { require(it >= 0) }
             val key = "files/$documentId/$pageIndex.pf"
             val bytes = entries[key] ?: continue
-            val path = File(root, "$documentId/page_$pageIndex.pf")
-            path.parentFile?.mkdirs()
-            if (portableFiles) ByteArrayInputStream(bytes).use { FileCrypto.encrypt(it, path) } else path.writeBytes(bytes)
-            fileMap["$documentId:$pageIndex"] = path.absolutePath
-            pages += DocumentPageEntity(documentId, pageIndex, path.absolutePath, item.optString("ocrText"))
+            val stagedPath = File(stagingRoot, "$documentId/page_$pageIndex.pf")
+            val finalPath = File(root, "$documentId/page_$pageIndex.pf")
+            stagedPath.parentFile?.mkdirs()
+            if (portableFiles) ByteArrayInputStream(bytes).use { FileCrypto.encrypt(it, stagedPath) } else stagedPath.writeBytes(bytes)
+            fileMap["$documentId:$pageIndex"] = finalPath.absolutePath
+            pages += DocumentPageEntity(documentId, pageIndex, finalPath.absolutePath, item.optString("ocrText"))
         }
         val documentArray = manifest.optJSONArray("documents") ?: JSONArray()
         for (index in 0 until documentArray.length()) {
@@ -141,12 +142,28 @@ class BackupService(private val context: Context) {
         val events = parseEvents(manifest.optJSONArray("events"))
         val checklist = parseChecklist(manifest.optJSONArray("checklist"))
         val reminders = parseReminders(manifest.optJSONArray("reminders"))
-        database.withTransaction {
-            database.caseDocumentDao().deleteAll(); database.timelineDao().deleteAll(); database.checklistDao().deleteAll(); database.reminderDao().deleteAll(); database.documentPageDao().deleteAll(); database.documentDao().deleteAll(); database.caseDao().deleteAll()
-            database.documentDao().insertAll(documents); database.documentPageDao().insertAll(pages); database.caseDao().insertAll(cases)
-            relations.forEach { database.caseDocumentDao().insert(it) }; events.forEach { database.timelineDao().insert(it) }; checklist.forEach { database.checklistDao().insert(it) }; reminders.forEach { database.reminderDao().insert(it) }
+        var previousMoved = false
+        try {
+            previousMoved = root.exists() && root.renameTo(previousRoot)
+            require(!root.exists()) { "Δεν ήταν δυνατή η προετοιμασία της επαναφοράς." }
+            require(stagingRoot.renameTo(root)) { "Δεν ήταν δυνατή η εγκατάσταση των αρχείων επαναφοράς." }
+            try {
+                database.withTransaction {
+                    database.caseDocumentDao().deleteAll(); database.timelineDao().deleteAll(); database.checklistDao().deleteAll(); database.reminderDao().deleteAll(); database.documentPageDao().deleteAll(); database.documentDao().deleteAll(); database.caseDao().deleteAll()
+                    database.documentDao().insertAll(documents); database.documentPageDao().insertAll(pages); database.caseDao().insertAll(cases)
+                    relations.forEach { database.caseDocumentDao().insert(it) }; events.forEach { database.timelineDao().insert(it) }; checklist.forEach { database.checklistDao().insert(it) }; reminders.forEach { database.reminderDao().insert(it) }
+                }
+            } catch (error: Throwable) {
+                FileCrypto.deleteRecursively(root)
+                if (previousMoved) previousRoot.renameTo(root)
+                throw error
+            }
+            if (previousMoved) FileCrypto.deleteRecursively(previousRoot)
+            ReminderScheduler.rescheduleAll(context)
+        } finally {
+            if (stagingRoot.exists()) FileCrypto.deleteRecursively(stagingRoot)
+            if (previousMoved && previousRoot.exists() && !root.exists()) previousRoot.renameTo(root)
         }
-        ReminderScheduler.rescheduleAll(context)
     }
 
     private fun documentJson(item: DocumentEntity) = JSONObject().apply {
