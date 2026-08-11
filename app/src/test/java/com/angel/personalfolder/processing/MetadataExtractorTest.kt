@@ -23,4 +23,15 @@ class MetadataExtractorTest {
         assertEquals("my-document", result.title)
         assertEquals("Άλλα", result.category)
     }
+
+    @Test
+    fun handlesAccentlessGreekAndEscapesJsonValues() {
+        val result = MetadataExtractor.extract(
+            "ΔΗΜΟΣ \"δοκιμή\"\nΑΡΙΘΜΟΣ ΠΡΩΤΟΚΟΛΛΟΥ: ΑΒ-123",
+            "Έγγραφο"
+        )
+        assertEquals("Δημόσιες υπηρεσίες", result.category)
+        assertEquals("αβ-123", result.protocolNumber)
+        assertTrue(result.json.contains("\\\"δοκιμή\\\""))
+    }
 }

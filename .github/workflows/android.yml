@@ -39,3 +39,10 @@ jobs:
         with:
           name: personal-folder-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+      - name: Upload Room schemas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-folder-room-schemas
+          path: app/schemas/
+          if-no-files-found: ignore
