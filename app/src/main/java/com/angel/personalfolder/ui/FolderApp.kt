@@ -558,3 +558,273 @@ private fun SettingsScreen(lockEnabled: Boolean, onEnableLock: () -> Unit, onDis
                         Button(onClick = onBackup, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Archive, null); Spacer(Modifier.width(6.dp)); Text("Δημιουργία") }
                         OutlinedButton(onClick = onRestore, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Restore, null); Spacer(Modifier.width(6.dp)); Text("Επαναφορά") }
                     }
+                }
+            }
+        }
+        item { Text("Έκδοση 2.0.0 · Ελληνικό περιβάλλον · Λειτουργία χωρίς σύνδεση", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) }
+    }
+}
+
+@Composable
+private fun QuickAction(modifier: Modifier, icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) { Card(modifier.clickable(onClick = onClick), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) { Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) { Icon(icon, null, tint = MaterialTheme.colorScheme.onPrimaryContainer); Text(label, color = MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.SemiBold) } } }
+
+@Composable
+private fun <T> FilterMenuChip(label: String, selectedLabel: String, options: List<Pair<T, String>>, onSelected: (T) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        FilterChip(selected = selectedLabel != "Όλες", onClick = { expanded = true }, label = { Text("$label: $selectedLabel", maxLines = 1, overflow = TextOverflow.Ellipsis) })
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (value, text) -> DropdownMenuItem(text = { Text(text, maxLines = 2, overflow = TextOverflow.Ellipsis) }, onClick = { expanded = false; onSelected(value) }) }
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) { Row(Modifier.fillMaxWidth().clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(8.dp)); Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)); Icon(Icons.Default.ArrowForward, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) } }
+
+@Composable
+private fun DocumentCard(document: DocumentEntity, onClick: () -> Unit, selected: Boolean = false, onToggleSelection: (() -> Unit)? = null) { Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Surface(Modifier.size(44.dp), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Description, null, tint = MaterialTheme.colorScheme.onPrimaryContainer) } }; Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(document.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(document.category, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp); if (document.processingState == ProcessingState.PROCESSING) Text("Γίνεται επεξεργασία…", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp) }; document.expiryDate?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }; onToggleSelection?.let { toggle -> androidx.compose.material3.Checkbox(checked = selected, onCheckedChange = { toggle() }) } } } }
+
+@Composable
+private fun CaseCard(caseEntity: CaseEntity, onClick: () -> Unit) { Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Assignment, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(caseEntity.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(caseEntity.nextStep.ifBlank { caseEntity.description.ifBlank { "Χωρίς επόμενο βήμα" } }, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }; AssistChip(onClick = {}, label = { Text(caseEntity.status, fontSize = 11.sp) }) } } }
+
+@Composable
+private fun InfoCard(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector) { Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = MaterialTheme.colorScheme.onTertiaryContainer); Spacer(Modifier.width(10.dp)); Column { Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onTertiaryContainer); Text(value, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onTertiaryContainer) } } } }
+
+@Composable
+private fun InfoRow(label: String, value: String) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant); Text(value, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(180.dp), maxLines = 2, overflow = TextOverflow.Ellipsis) } }
+
+@Composable
+private fun StatusChip(state: String) { val label = when (state) { ProcessingState.PROCESSED -> "Έτοιμο"; ProcessingState.PROCESSING -> "Επεξεργασία"; ProcessingState.FAILED -> "Αποτυχία"; else -> "Σε αναμονή" }; AssistChip(onClick = {}, label = { Text(label) }, leadingIcon = { Icon(if (state == ProcessingState.PROCESSED) Icons.Default.Check else Icons.Default.MoreVert, null, Modifier.size(16.dp)) }) }
+
+@Composable
+private fun EmptyState(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector) { Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(30.dp)) { Icon(icon, null, modifier = Modifier.size(42.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = .65f)); Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+
+@Composable
+private fun LockedScreen() {
+    Surface(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Icon(Icons.Default.Lock, null, modifier = Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(16.dp))
+            Text("Ο φάκελος είναι κλειδωμένος", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("Επιβεβαίωσε την ταυτότητά σου για να συνεχίσεις.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+        }
+    }
+}
+
+@Composable
+private fun ReminderCard(reminder: ReminderEntity, onDone: () -> Unit) {
+    val date = remember(reminder.dueAt) {
+        Instant.ofEpochMilli(reminder.dueAt).atZone(ZoneId.systemDefault()).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.CalendarMonth, null, tint = MaterialTheme.colorScheme.error)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(reminder.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Προθεσμία: $date", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+            }
+            IconButton(onClick = onDone) { Icon(Icons.Default.Check, "Ολοκληρώθηκε") }
+        }
+    }
+}
+
+@Composable
+private fun LinearProcessing() { androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp)) }
+
+@Composable
+private fun ChecklistRow(item: ChecklistItemEntity, linkedDocument: DocumentEntity?, onChecked: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        androidx.compose.material3.Checkbox(checked = item.isComplete, onCheckedChange = onChecked)
+        Column(Modifier.weight(1f)) {
+            Text(item.title, color = if (item.isComplete) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
+            linkedDocument?.let { Text("Έγγραφο: ${it.title}", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        }
+    }
+}
+
+@Composable
+private fun TimelineRow(event: com.angel.personalfolder.data.TimelineEventEntity) { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Box(Modifier.size(10.dp).clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.primary)); Spacer(Modifier.height(4.dp)); Divider(Modifier.height(45.dp).width(1.dp)) }; Spacer(Modifier.width(12.dp)); Column { Text(event.title, fontWeight = FontWeight.SemiBold); Text(event.eventDate, color = MaterialTheme.colorScheme.primary, fontSize = 12.sp); if (event.note.isNotBlank()) Text(event.note, color = MaterialTheme.colorScheme.onSurfaceVariant) } } }
+
+@Composable
+private fun CreateCaseDialog(onDismiss: () -> Unit, onSave: (String, String, String?, String?, String, String) -> Unit) {
+    var title by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf("") }
+    var startDate by remember { mutableStateOf("") }
+    var deadline by remember { mutableStateOf("") }
+    var nextStep by remember { mutableStateOf("") }
+    var notes by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Νέα υπόθεση") },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.heightIn(max = 520.dp)) {
+                item { OutlinedTextField(title, { title = it }, label = { Text("Τίτλος") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(description, { description = it }, label = { Text("Περιγραφή") }, minLines = 3, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(startDate, { startDate = it }, label = { Text("Ημερομηνία έναρξης (YYYY-MM-DD)") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(deadline, { deadline = it }, label = { Text("Προθεσμία (YYYY-MM-DD)") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(nextStep, { nextStep = it }, label = { Text("Επόμενο βήμα") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(notes, { notes = it }, label = { Text("Σημειώσεις") }, minLines = 3, modifier = Modifier.fillMaxWidth()) }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(title, description, startDate.trim().ifBlank { null }, deadline.trim().ifBlank { null }, nextStep, notes) }, enabled = title.isNotBlank()) { Text("Αποθήκευση") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Ακύρωση") } }
+    )
+}
+
+@Composable
+private fun CaseEditDialog(
+    caseEntity: CaseEntity,
+    onDismiss: () -> Unit,
+    onSave: (String, String, String, String?, String?, String, String) -> Unit
+) {
+    var title by remember { mutableStateOf(caseEntity.title) }
+    var description by remember { mutableStateOf(caseEntity.description) }
+    var status by remember { mutableStateOf(caseEntity.status) }
+    var startDate by remember { mutableStateOf(caseEntity.startDate.orEmpty()) }
+    var deadline by remember { mutableStateOf(caseEntity.deadline.orEmpty()) }
+    var nextStep by remember { mutableStateOf(caseEntity.nextStep) }
+    var notes by remember { mutableStateOf(caseEntity.notes) }
+    var menu by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Επεξεργασία υπόθεσης") },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.heightIn(max = 520.dp)) {
+                item { OutlinedTextField(title, { title = it }, label = { Text("Τίτλος") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(description, { description = it }, label = { Text("Περιγραφή") }, minLines = 3, modifier = Modifier.fillMaxWidth()) }
+                item {
+                    Box {
+                        OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth()) { Text(status, modifier = Modifier.weight(1f)); Icon(Icons.Default.MoreVert, null) }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) { FolderViewModel.caseStatuses.forEach { option -> DropdownMenuItem(text = { Text(option) }, onClick = { status = option; menu = false }) } }
+                    }
+                }
+                item { OutlinedTextField(startDate, { startDate = it }, label = { Text("Ημερομηνία έναρξης (YYYY-MM-DD)") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(deadline, { deadline = it }, label = { Text("Προθεσμία (YYYY-MM-DD)") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(nextStep, { nextStep = it }, label = { Text("Επόμενο βήμα") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(notes, { notes = it }, label = { Text("Σημειώσεις") }, minLines = 3, modifier = Modifier.fillMaxWidth()) }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(title, description, status, startDate.trim().ifBlank { null }, deadline.trim().ifBlank { null }, nextStep, notes) }, enabled = title.isNotBlank()) { Text("Αποθήκευση") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Ακύρωση") } }
+    )
+}
+
+@Composable
+private fun AttachDocumentDialog(documents: List<DocumentEntity>, onDismiss: () -> Unit, onAttach: (String) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Σύνδεση εγγράφου") },
+        text = {
+            if (documents.isEmpty()) Text("Όλα τα έγγραφα είναι ήδη συνδεδεμένα ή δεν υπάρχουν διαθέσιμα έγγραφα.")
+            else LazyColumn(Modifier.heightIn(max = 300.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                items(documents, key = { it.id }) { document ->
+                    TextButton(onClick = { onAttach(document.id) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(document.title, modifier = Modifier.fillMaxWidth(), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Κλείσιμο") } }
+    )
+}
+
+@Composable
+private fun ChecklistDialog(
+    documents: List<DocumentEntity>,
+    onDismiss: () -> Unit,
+    onSave: (String, String?) -> Unit
+) {
+    var title by remember { mutableStateOf("") }
+    var selectedDocumentId by remember { mutableStateOf<String?>(null) }
+    var menu by remember { mutableStateOf(false) }
+    val selectedTitle = documents.firstOrNull { it.id == selectedDocumentId }?.title ?: "Χωρίς σύνδεση εγγράφου"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Νέο δικαιολογητικό") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(title, { title = it }, label = { Text("Τι χρειάζεται;") }, singleLine = true)
+                Box {
+                    OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth()) { Text(selectedTitle, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis); Icon(Icons.Default.MoreVert, null) }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text("Χωρίς σύνδεση") }, onClick = { selectedDocumentId = null; menu = false })
+                        documents.forEach { document -> DropdownMenuItem(text = { Text(document.title, maxLines = 2, overflow = TextOverflow.Ellipsis) }, onClick = { selectedDocumentId = document.id; menu = false }) }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(enabled = title.isNotBlank(), onClick = { onSave(title, selectedDocumentId) }) { Text("Προσθήκη") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Ακύρωση") } }
+    )
+}
+
+@Composable
+private fun DocumentEditDialog(document: DocumentEntity, viewModel: FolderViewModel, onDismiss: () -> Unit) {
+    var title by remember { mutableStateOf(document.title) }
+    var tags by remember { mutableStateOf(document.tags) }
+    var provider by remember { mutableStateOf(document.provider) }
+    var issuedDate by remember { mutableStateOf(document.issuedDate.orEmpty()) }
+    var expiryDate by remember { mutableStateOf(document.expiryDate.orEmpty()) }
+    var protocolNumber by remember { mutableStateOf(document.protocolNumber.orEmpty()) }
+    var category by remember { mutableStateOf(document.category) }
+    var menu by remember { mutableStateOf(false) }
+    val categories = listOf("Ταυτότητα / προσωπικά", "Μετανάστευση / άδειες", "Κατοικία", "Δημόσιες υπηρεσίες", "Εργασία", "Οικονομικά", "Λογαριασμοί", "Υγεία", "Συμβόλαια", "Άλλα")
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Διόρθωση στοιχείων") },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.heightIn(max = 520.dp)) {
+                item { Text("Οι τιμές OCR είναι προτάσεις. Οι αλλαγές σου διατηρούνται σε επόμενη επεξεργασία.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
+                item { OutlinedTextField(title, { title = it }, label = { Text("Τίτλος") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item {
+                    Box {
+                        OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth()) { Text(category, modifier = Modifier.weight(1f)); Icon(Icons.Default.MoreVert, null) }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) { categories.forEach { option -> DropdownMenuItem(text = { Text(option) }, onClick = { category = option; menu = false }) } }
+                    }
+                }
+                item { OutlinedTextField(tags, { tags = it }, label = { Text("Ετικέτες (με κόμμα)") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(provider, { provider = it }, label = { Text("Φορέας") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(protocolNumber, { protocolNumber = it }, label = { Text("Αριθμός πρωτοκόλλου") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(issuedDate, { issuedDate = it }, label = { Text("Ημερομηνία έκδοσης (YYYY-MM-DD)") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item { OutlinedTextField(expiryDate, { expiryDate = it }, label = { Text("Ημερομηνία λήξης (YYYY-MM-DD)") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                viewModel.updateDocument(document.id, title, category, tags, provider, issuedDate.trim().ifBlank { null }, expiryDate.trim().ifBlank { null }, protocolNumber.trim().ifBlank { null })
+                onDismiss()
+            }) { Text("Αποθήκευση") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Ακύρωση") } }
+    )
+}
+
+@Composable
+private fun EventDialog(onDismiss: () -> Unit, onSave: (String, String) -> Unit) { var title by remember { mutableStateOf("") }; var note by remember { mutableStateOf("") }; AlertDialog(onDismissRequest = onDismiss, title = { Text("Νέο γεγονός") }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedTextField(title, { title = it }, label = { Text("Τίτλος γεγονότος") }, singleLine = true); OutlinedTextField(note, { note = it }, label = { Text("Σημείωση") }, minLines = 2) } }, confirmButton = { TextButton(enabled = title.isNotBlank(), onClick = { onSave(title, note) }) { Text("Αποθήκευση") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Ακύρωση") } }) }
+
+@Composable
+private fun PasswordDialog(title: String, minimumLength: Int, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var password by remember { mutableStateOf("") }
+    var confirmation by remember { mutableStateOf("") }
+    var visible by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Ο κωδικός δεν αποθηκεύεται. Χρησιμοποίησέ τον ξανά για επαναφορά. Ελάχιστο μήκος: $minimumLength χαρακτήρες.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+            OutlinedTextField(
+                password, { password = it }, label = { Text("Κωδικός") }, singleLine = true,
+                visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = { IconButton(onClick = { visible = !visible }) { Icon(if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility, "Προβολή κωδικού") } }
+            )
+            OutlinedTextField(
+                confirmation, { confirmation = it }, label = { Text("Επιβεβαίωση κωδικού") }, singleLine = true,
+                visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation()
+            )
+        } },
+        confirmButton = { TextButton(enabled = password.length >= minimumLength && password == confirmation, onClick = { onConfirm(password) }) { Text("Συνέχεια") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Ακύρωση") } }
+    )
+}
