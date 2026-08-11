@@ -255,7 +255,7 @@ private fun HomeScreen(
         if (documents.isEmpty()) {
             item { EmptyState("Δεν έχεις προσθέσει ακόμη έγγραφα.", Icons.Default.Description) }
         } else {
-            items(documents.take(5), key = { it.id }) { document -> DocumentCard(document) { onDocument(document.id) } }
+            items(documents.take(5), key = { it.id }) { document -> DocumentCard(document, onClick = { onDocument(document.id) }) }
         }
         item { SectionHeader("Ενεργές υποθέσεις", Icons.Default.Assignment, onCases) }
         if (cases.isEmpty()) {
