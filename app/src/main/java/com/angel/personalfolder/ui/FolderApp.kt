@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -102,6 +103,7 @@ fun FolderApp(
     onImport: () -> Unit,
     onCamera: () -> Unit,
     onOpenDocument: (String) -> Unit,
+    onShareDocument: (String) -> Unit,
     onEnableLock: () -> Unit,
     onDisableLock: () -> Unit,
     onCreateBackup: (String) -> Unit,
@@ -163,7 +165,7 @@ fun FolderApp(
             when {
                 selectedDocumentId != null -> {
                     val document = documents.firstOrNull { it.id == selectedDocumentId }
-                    if (document != null) DocumentDetailScreen(document, viewModel, onOpenDocument, onBack = { selectedDocumentId = null })
+                    if (document != null) DocumentDetailScreen(document, viewModel, onOpenDocument, onShareDocument, onBack = { selectedDocumentId = null })
                 }
                 selectedCaseId != null -> {
                     val caseEntity = cases.firstOrNull { it.id == selectedCaseId }
@@ -299,7 +301,7 @@ private fun CasesScreen(cases: List<CaseEntity>, onCase: (String) -> Unit, onAdd
 }
 
 @Composable
-private fun DocumentDetailScreen(document: DocumentEntity, viewModel: FolderViewModel, onOpen: (String) -> Unit, onBack: () -> Unit) {
+private fun DocumentDetailScreen(document: DocumentEntity, viewModel: FolderViewModel, onOpen: (String) -> Unit, onShare: (String) -> Unit, onBack: () -> Unit) {
     var edit by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -320,6 +322,7 @@ private fun DocumentDetailScreen(document: DocumentEntity, viewModel: FolderView
             if (document.tags.isNotBlank()) Text("Ετικέτες: ${document.tags}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
         }
         item { OutlinedButton(onClick = { onOpen(document.id) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.OpenInNew, null); Spacer(Modifier.width(8.dp)); Text("Άνοιγμα πρωτοτύπου") } }
+        item { OutlinedButton(onClick = { onShare(document.id) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Share, null); Spacer(Modifier.width(8.dp)); Text("Κοινοποίηση εγγράφου") } }
         if (document.expiryDate != null) item { InfoCard("Ημερομηνία λήξης", document.expiryDate, Icons.Default.CalendarMonth) }
         if (document.provider.isNotBlank() || document.protocolNumber != null) item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

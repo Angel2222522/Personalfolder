@@ -20,6 +20,7 @@
     <string name="close">Κλείσιμο</string>
     <string name="delete">Διαγραφή</string>
     <string name="open_original">Άνοιγμα πρωτοτύπου</string>
+    <string name="share_document">Κοινοποίηση εγγράφου</string>
     <string name="ocr_text">Αναγνωρισμένο κείμενο</string>
     <string name="metadata">Στοιχεία</string>
     <string name="category">Κατηγορία</string>

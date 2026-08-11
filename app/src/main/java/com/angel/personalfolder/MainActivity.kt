@@ -33,7 +33,7 @@ class MainActivity : FragmentActivity() {
     private val biometricExecutor: Executor by lazy { ContextCompat.getMainExecutor(this) }
 
     private val documentPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        uris.forEach { contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        uris.forEach { uri -> runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
         viewModel.importUris(uris)
     }
 
@@ -45,7 +45,10 @@ class MainActivity : FragmentActivity() {
 
     private val cameraCapture = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         val file = cameraFile
-        if (success && file != null) viewModel.importUris(listOf(FileProvider.getUriForFile(this, "$packageName.fileprovider", file)))
+        if (success && file != null) {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            viewModel.importUris(listOf(uri)) { file.delete() }
+        }
         else file?.delete()
         cameraFile = null
         cameraUri = null
@@ -65,6 +68,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        File(cacheDir, "share").deleteRecursively()
         handleIncomingIntent(intent)
         setContent {
             PersonalFolderTheme {
@@ -73,6 +77,7 @@ class MainActivity : FragmentActivity() {
                     onImport = { documentPicker.launch(arrayOf("application/pdf", "image/*")) },
                     onCamera = ::takePhoto,
                     onOpenDocument = ::openDocument,
+                    onShareDocument = ::shareDocument,
                     onEnableLock = { authenticate { settings.edit().putBoolean(KEY_LOCK, true).apply() } },
                     onDisableLock = { authenticate { settings.edit().putBoolean(KEY_LOCK, false).apply() } },
                     onCreateBackup = { password -> pendingBackupPassword = password; backupCreator.launch("personal-folder-backup.pfb") },
@@ -131,6 +136,24 @@ class MainActivity : FragmentActivity() {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 startActivity(Intent.createChooser(intent, getString(R.string.open_original)))
+            }
+        }
+    }
+
+    private fun shareDocument(documentId: String) {
+        lifecycleScope.launch {
+            val document = viewModel.getDocument(documentId) ?: return@launch
+            val extension = document.originalFileName.substringAfterLast('.', "bin")
+            val shareFile = File(cacheDir, "share/${document.id}.$extension").apply { parentFile?.mkdirs() }
+            runCatching {
+                FileCrypto.decryptToTemp(File(document.encryptedPath), shareFile)
+                val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", shareFile)
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = document.mimeType.ifBlank { "application/octet-stream" }
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(intent, getString(R.string.share_document)))
             }
         }
     }

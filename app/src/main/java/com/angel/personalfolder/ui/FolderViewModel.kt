@@ -40,12 +40,13 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setQuery(value: String) { _query.value = value }
 
-    fun importUris(uris: List<Uri>) = viewModelScope.launch {
+    fun importUris(uris: List<Uri>, onFinished: () -> Unit = {}) = viewModelScope.launch {
         _busy.value = true
         runCatching { repository.importUris(uris) }
             .onSuccess { if (it != null) _message.emit("Το έγγραφο εισήχθη και επεξεργάζεται τοπικά.") }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η εισαγωγή.") }
         _busy.value = false
+        runCatching { onFinished() }
     }
 
     suspend fun getDocument(id: String): DocumentEntity? = repository.document(id)
