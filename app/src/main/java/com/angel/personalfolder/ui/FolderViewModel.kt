@@ -183,7 +183,7 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     fun exportPdf(destination: Uri, documentIds: List<String>) = viewModelScope.launch {
         _busy.value = true
         runCatching { exportService.exportPdf(destination, documentIds) }
-            .onSuccess { _message.emit("Το ενιαίο PDF δημιουργήθηκε.") }
+            .onSuccess { _message.emit("Το ενιαίο PDF δημιουργήθηκε. Το αρχείο δεν είναι κρυπτογραφημένο.") }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η δημιουργία PDF.") }
         _busy.value = false
     }

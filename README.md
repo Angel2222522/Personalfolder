@@ -14,13 +14,15 @@ Offline-first Android εφαρμογή για ιδιωτική οργάνωση 
 - Room FTS αναζήτηση σε τίτλο, filename, OCR, φορέα, κατηγορία, tags και protocol number, με φίλτρα κατηγορίας, υπόθεσης, processing state και σύντομης λήξης.
 - Εξαγωγή ZIP με όλες τις σελίδες και streaming unified PDF χωρίς εξάρτηση από εξωτερικό viewer. Οι ordinary exports είναι μη κρυπτογραφημένοι.
 - Password-protected portable backup με bounded/validated ZIP restore, wrong-password/corruption handling, relations και reminder rescheduling.
-- Biometric/device-credential lock με fail-closed policy, `FLAG_SECURE`, masked password fields και generic locked-screen notifications.
+- Biometric/device-credential lock με fail-closed policy, `FLAG_SECURE`, masked password fields και generic notifications χωρίς τίτλους εγγράφων.
 
 ## Απόρρητο και δεδομένα
 
 Η εφαρμογή δεν έχει backend, λογαριασμό, analytics, trackers, διαφημίσεις ή `INTERNET` permission. Τα document bytes κρυπτογραφούνται με AES-GCM και Android Keystore. Το backup password δεν αποθηκεύεται.
 
 Το portable backup περιλαμβάνει documents, OCR, metadata, cases, relations, checklist, timeline και reminders. Δεν περιλαμβάνει security settings, biometric state ή credentials. Για πραγματικά ευαίσθητη μεταφορά χρησιμοποίησε το encrypted backup και όχι ZIP/PDF export.
+
+Το baseline security audit της V1 ολοκληρώθηκε με 9 source-backed findings (7 medium, 2 low). Οι διορθώσεις τους καταγράφονται στο changelog και στις σημειώσεις ασφαλείας· το audit καταγράφηκε πριν την αλλαγή του repository σε V2, επομένως δεν παρουσιάζεται ως scan του τελικού commit.
 
 ## Αναβάθμιση από V1
 

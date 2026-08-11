@@ -16,6 +16,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -65,6 +66,20 @@ class BackupRoundTripTest {
             BackupCrypto.decryptToFile(context, encryptedUri, context.cacheDir.resolve("share/backup-test-wrong.bin"), "wrong password".toCharArray())
         }
         source.delete(); encrypted.delete(); restored.delete()
+    }
+
+    @Test
+    fun newBackupsRejectShortPasswords() = runBlocking {
+        val backup = context.cacheDir.resolve("share/backup-test-short-password.pfb").apply { parentFile?.mkdirs(); createNewFile() }
+        val backupUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", backup)
+        try {
+            BackupService(context).create(backupUri, "short")
+            fail("A new backup must reject a short password")
+        } catch (_: IllegalArgumentException) {
+            // Expected policy rejection.
+        } finally {
+            backup.delete()
+        }
     }
 
     @Test

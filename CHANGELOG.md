@@ -26,7 +26,8 @@
 ### Security and UX
 
 - Biometric lock is fail-closed, sensitive windows use `FLAG_SECURE`, and password inputs are masked.
-- Added deterministic temporary plaintext cleanup and startup recovery.
+- Added deterministic temporary plaintext cleanup and startup recovery, generic notifications, and fail-closed Keystore-loss handling.
+- New backups require a 12-character password minimum; restore keeps compatibility with existing 8-character backups.
 - Updated Greek Material 3 UI, empty/error states, dark theme, edge-to-edge handling and honest backup/export copy.
 
 ### Verification
