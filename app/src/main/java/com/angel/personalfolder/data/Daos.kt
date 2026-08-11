@@ -40,8 +40,8 @@ interface DocumentDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(documents: List<DocumentEntity>)
 
-    @Query("UPDATE documents SET title = :title, category = :category, expiryDate = :expiryDate, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun updateBasics(id: String, title: String, category: String, expiryDate: String?, updatedAt: Long)
+    @Query("UPDATE documents SET title = :title, category = :category, tags = :tags, expiryDate = :expiryDate, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateBasics(id: String, title: String, category: String, tags: String, expiryDate: String?, updatedAt: Long)
 
     @Query("UPDATE documents SET category = :category, ocrText = :ocrText, provider = :provider, issuedDate = :issuedDate, expiryDate = :expiryDate, protocolNumber = :protocolNumber, extractedMetadataJson = :metadataJson, processingState = :state, processingError = :error, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateProcessing(

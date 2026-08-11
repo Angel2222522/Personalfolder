@@ -50,8 +50,8 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
 
     suspend fun getDocument(id: String): DocumentEntity? = repository.document(id)
 
-    fun updateDocument(id: String, title: String, category: String, expiryDate: String?) = viewModelScope.launch {
-        runCatching { repository.updateDocumentBasics(id, title, category, expiryDate) }
+    fun updateDocument(id: String, title: String, category: String, tags: String, expiryDate: String?) = viewModelScope.launch {
+        runCatching { repository.updateDocumentBasics(id, title, category, tags, expiryDate) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αποθήκευση.") }
     }
 

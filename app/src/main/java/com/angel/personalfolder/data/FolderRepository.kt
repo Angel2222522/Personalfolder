@@ -71,8 +71,8 @@ class FolderRepository(private val context: Context) {
         }
     }
 
-    suspend fun updateDocumentBasics(id: String, title: String, category: String, expiryDate: String?) {
-        database.documentDao().updateBasics(id, title.trim().ifBlank { "Έγγραφο" }, category, expiryDate, System.currentTimeMillis())
+    suspend fun updateDocumentBasics(id: String, title: String, category: String, tags: String, expiryDate: String?) {
+        database.documentDao().updateBasics(id, title.trim().ifBlank { "Έγγραφο" }, category, tags.trim(), expiryDate, System.currentTimeMillis())
         ReminderScheduler.replaceForDocument(context, id, title.trim().ifBlank { "Έγγραφο" }, expiryDate)
     }
 
