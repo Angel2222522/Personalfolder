@@ -1,6 +1,5 @@
 package com.angel.personalfolder.processing
 
-import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -56,17 +55,40 @@ object MetadataExtractor {
         val keywords = categoryRules.flatMap { (key, words) ->
             if (lower.contains(key.lowercase())) listOf(key) else words.filter(lower::contains)
         }.distinct().take(12)
-        val json = JSONObject().apply {
-            put("title", title)
-            put("category", category)
-            put("provider", provider)
-            put("issuedDate", issued ?: JSONObject.NULL)
-            put("expiryDate", expiry ?: JSONObject.NULL)
-            put("protocolNumber", protocol ?: JSONObject.NULL)
-            put("keywords", keywords.joinToString(","))
-            put("confidence", "suggested")
-        }.toString()
+        val json = buildString {
+            append('{')
+            append("\"title\":\"").append(jsonEscape(title)).append("\",")
+            append("\"category\":\"").append(jsonEscape(category)).append("\",")
+            append("\"provider\":\"").append(jsonEscape(provider)).append("\",")
+            append("\"issuedDate\":").append(jsonValue(issued)).append(',')
+            append("\"expiryDate\":").append(jsonValue(expiry)).append(',')
+            append("\"protocolNumber\":").append(jsonValue(protocol)).append(',')
+            append("\"keywords\":\"").append(jsonEscape(keywords.joinToString(","))).append("\",")
+            append("\"confidence\":\"suggested\"")
+            append('}')
+        }
         return ExtractedMetadata(title, category, provider, issued, expiry, protocol, keywords, json)
+    }
+
+    private fun jsonValue(value: String?): String = value?.let { "\"${jsonEscape(it)}\"" } ?: "null"
+
+    private fun jsonEscape(value: String): String = buildString {
+        value.forEach { character ->
+            when (character) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                '\b' -> append("\\b")
+                '\u000C' -> append("\\f")
+                else -> if (character.code < 0x20) {
+                    append("\\u%04x".format(Locale.ROOT, character.code))
+                } else {
+                    append(character)
+                }
+            }
+        }
     }
 
     private fun normalizeDate(raw: String): String? {
