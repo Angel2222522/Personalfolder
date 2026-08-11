@@ -65,6 +65,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -88,6 +89,7 @@ import java.time.LocalDate
 
 private enum class MainSection { HOME, DOCUMENTS, CASES, SETTINGS }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FolderApp(
     viewModel: FolderViewModel,
@@ -340,12 +342,12 @@ private fun CaseDetailScreen(caseEntity: CaseEntity, viewModel: FolderViewModel)
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) { Text("Λίστα δικαιολογητικών", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold); IconButton(onClick = { addItem = true }) { Icon(Icons.Default.Add, "Προσθήκη") } }
             if (checklist.isEmpty()) Text("Δεν έχεις προσθέσει στοιχεία.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            else checklist.forEach { item -> ChecklistRow(item) { viewModel.setChecklistComplete(item, it) } }
+            else for (checkItem in checklist) { ChecklistRow(checkItem) { complete -> viewModel.setChecklistComplete(checkItem, complete) } }
         }
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) { Text("Χρονολόγιο", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold); IconButton(onClick = { addEvent = true }) { Icon(Icons.Default.Add, "Νέο γεγονός") } }
             if (timeline.isEmpty()) Text("Δεν υπάρχουν γεγονότα.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            else timeline.forEach { TimelineRow(it) }
+            else for (event in timeline) { TimelineRow(event) }
         }
     }
     if (addItem) SimpleInputDialog("Νέο στοιχείο", "Τι χρειάζεται;", onDismiss = { addItem = false }) { viewModel.addChecklistItem(caseEntity.id, it); addItem = false }

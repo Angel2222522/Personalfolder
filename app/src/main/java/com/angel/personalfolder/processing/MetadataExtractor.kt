@@ -16,9 +16,9 @@ data class ExtractedMetadata(
 )
 
 object MetadataExtractor {
-    private val dateRegex = Regex("\\b(\\d{1,2}[./-]\\d{1,2}[./-]\\d{4}|\\d{4}[./-]\\d{1,2}[./-]\\d{1,2})\\b")
+    private val dateRegex = Regex("""\b(\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})\b""")
     private val protocolRegex = Regex(
-        "(?i)(?:αριθ(?:μός|μο)?\\s*(?:πρωτοκόλλου|αίτησης)?|αρ\.?\\s*πρωτ(?:οκ)?|protocol|application)\\s*[:#№-]?\\s*([A-ZΑ-Ω0-9][A-ZΑ-Ω0-9./_-]{2,})"
+        """(?i)(?:αριθ(?:μός|μο)?\s*(?:πρωτοκόλλου|αίτησης)?|αρ\.?\s*πρωτ(?:οκ)?|protocol|application)\s*[:#№-]?\s*([A-ZΑ-Ω0-9][A-ZΑ-Ω0-9./_-]{2,})"""
     )
 
     private val categoryRules = linkedMapOf(
@@ -45,13 +45,17 @@ object MetadataExtractor {
         val dates = dateRegex.findAll(normalized).mapNotNull { normalizeDate(it.value) }.distinct().toList()
         val expiry = dates.firstOrNull { date ->
             val index = normalized.indexOf(date)
-            val context = normalized.substring((index - 50).coerceAtLeast(0), (index + date.length + 50).coerceAtMost(normalized.length)).lowercase()
+            val context = normalized.substring(
+                (index - 50).coerceAtLeast(0),
+                (index + date.length + 50).coerceAtMost(normalized.length)
+            ).lowercase()
             listOf("λήξ", "έως", "μέχρι", "ισχύει", "expiry", "valid").any(context::contains)
         } ?: dates.lastOrNull()
         val issued = dates.firstOrNull { it != expiry }
         val protocol = protocolRegex.find(normalized)?.groupValues?.getOrNull(1)
-        val keywords = categoryRules.flatMap { (key, words) -> if (lower.contains(key.lowercase())) listOf(key) else words.filter(lower::contains) }
-            .distinct().take(12)
+        val keywords = categoryRules.flatMap { (key, words) ->
+            if (lower.contains(key.lowercase())) listOf(key) else words.filter(lower::contains)
+        }.distinct().take(12)
         val json = JSONObject().apply {
             put("title", title)
             put("category", category)

@@ -5,13 +5,13 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import com.angel.personalfolder.security.FileCrypto
 import com.angel.personalfolder.ui.FolderApp
@@ -21,7 +21,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.Executor
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private val viewModel by lazy { androidx.lifecycle.ViewModelProvider(this)[FolderViewModel::class.java] }
     private val settings by lazy { getSharedPreferences("personal_folder_settings", MODE_PRIVATE) }
     private var cameraFile: File? = null
@@ -99,7 +99,7 @@ class MainActivity : ComponentActivity() {
         val file = File(cacheDir, "camera/${System.currentTimeMillis()}.jpg").apply { parentFile?.mkdirs() }
         cameraFile = file
         cameraUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-        cameraCapture.launch(cameraUri)
+        cameraCapture.launch(cameraUri!!)
     }
 
     private fun handleIncomingIntent(incoming: Intent?) {

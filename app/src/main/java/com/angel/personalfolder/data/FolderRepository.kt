@@ -19,7 +19,7 @@ class FolderRepository(private val context: Context) {
     fun documents(query: String) = if (query.isBlank()) database.documentDao().observeAll() else database.documentDao().search(query.trim())
     fun cases() = database.caseDao().observeAll()
     fun pendingReminders() = database.reminderDao().observePending()
-    fun document(id: String) = database.documentDao().getById(id)
+    suspend fun document(id: String) = database.documentDao().getById(id)
     fun timeline(caseId: String) = database.timelineDao().observeForCase(caseId)
     fun checklist(caseId: String) = database.checklistDao().observeForCase(caseId)
 
@@ -30,7 +30,7 @@ class FolderRepository(private val context: Context) {
         val pages = mutableListOf<DocumentPageEntity>()
         var firstName = "Έγγραφο"
         var firstMime = "application/octet-stream"
-        try {
+        return try {
             uris.forEachIndexed { index, uri ->
                 val name = displayName(uri) ?: "σελίδα_${index + 1}"
                 val mime = context.contentResolver.getType(uri).orEmpty()
