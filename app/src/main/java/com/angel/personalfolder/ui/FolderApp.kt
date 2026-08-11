@@ -110,6 +110,7 @@ fun FolderApp(
     onRestoreBackup: (String) -> Unit,
     onRequestNotifications: () -> Unit,
     onExportDocuments: (List<String>) -> Unit,
+    onExportPdf: (List<String>) -> Unit,
     lockEnabled: Boolean
 ) {
     val documents by viewModel.documents.collectAsStateWithLifecycle()
@@ -173,7 +174,7 @@ fun FolderApp(
                     if (caseEntity != null) CaseDetailScreen(caseEntity, documents, viewModel, onOpenDocument)
                 }
                 section == MainSection.HOME.name -> HomeScreen(documents, cases, reminders, onImport, onCamera, { section = MainSection.DOCUMENTS.name }, { section = MainSection.CASES.name }, { selectedDocumentId = it }, { selectedCaseId = it }, viewModel::markReminderDone)
-                section == MainSection.DOCUMENTS.name -> DocumentsScreen(documents, query, busy, viewModel::setQuery, { selectedDocumentId = it }, onImport, onExportDocuments)
+                section == MainSection.DOCUMENTS.name -> DocumentsScreen(documents, query, busy, viewModel::setQuery, { selectedDocumentId = it }, onImport, onExportDocuments, onExportPdf)
                 section == MainSection.CASES.name -> CasesScreen(cases, { selectedCaseId = it }, { showCreateCase = true })
                 else -> SettingsScreen(lockEnabled, onEnableLock, onDisableLock, onRequestNotifications, onBackup = { backupAction = "create" }, onRestore = { backupAction = "restore" })
             }
@@ -274,7 +275,8 @@ private fun DocumentsScreen(
     onQuery: (String) -> Unit,
     onDocument: (String) -> Unit,
     onImport: () -> Unit,
-    onExportDocuments: (List<String>) -> Unit
+    onExportDocuments: (List<String>) -> Unit,
+    onExportPdf: (List<String>) -> Unit
 ) {
     var selectedIds by remember { mutableStateOf(emptySet<String>()) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -283,6 +285,7 @@ private fun DocumentsScreen(
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Επιλεγμένα: ${selectedIds.size}", modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
                 OutlinedButton(onClick = { onExportDocuments(selectedIds.toList()) }) { Text("Εξαγωγή ZIP") }
+                OutlinedButton(onClick = { onExportPdf(selectedIds.toList()) }) { Text("Ενιαίο PDF") }
                 TextButton(onClick = { selectedIds = emptySet() }) { Text("Καθαρισμός") }
             }
         }

@@ -31,6 +31,7 @@ class MainActivity : FragmentActivity() {
     private var lockPromptVisible = false
     private var pendingBackupPassword: String? = null
     private var pendingExportDocumentIds: List<String> = emptyList()
+    private var pendingPdfDocumentIds: List<String> = emptyList()
     private val biometricExecutor: Executor by lazy { ContextCompat.getMainExecutor(this) }
 
     private val documentPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -73,6 +74,12 @@ class MainActivity : FragmentActivity() {
         if (uri != null && documentIds.isNotEmpty()) viewModel.exportDocuments(uri, documentIds)
     }
 
+    private val pdfExportCreator = registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val documentIds = pendingPdfDocumentIds
+        pendingPdfDocumentIds = emptyList()
+        if (uri != null && documentIds.isNotEmpty()) viewModel.exportPdf(uri, documentIds)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         File(cacheDir, "share").deleteRecursively()
@@ -92,6 +99,7 @@ class MainActivity : FragmentActivity() {
                     onRestoreBackup = { password -> pendingBackupPassword = password; backupPicker.launch(arrayOf("application/octet-stream", "application/zip", "*/*")) },
                     onRequestNotifications = ::requestNotificationPermission,
                     onExportDocuments = { documentIds -> pendingExportDocumentIds = documentIds; exportCreator.launch("personal-folder-export.zip") },
+                    onExportPdf = { documentIds -> pendingPdfDocumentIds = documentIds; pdfExportCreator.launch("personal-folder-export.pdf") },
                     lockEnabled = settings.getBoolean(KEY_LOCK, false)
                 )
             }

@@ -128,6 +128,14 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
         _busy.value = false
     }
 
+    fun exportPdf(destination: Uri, documentIds: List<String>) = viewModelScope.launch {
+        _busy.value = true
+        runCatching { exportService.exportPdf(destination, documentIds) }
+            .onSuccess { _message.emit("Το ενιαίο PDF δημιουργήθηκε.") }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η δημιουργία PDF.") }
+        _busy.value = false
+    }
+
     companion object {
         val caseStatuses = listOf(
             CaseStatus.NEW, CaseStatus.IN_PROGRESS, CaseStatus.WAITING,
