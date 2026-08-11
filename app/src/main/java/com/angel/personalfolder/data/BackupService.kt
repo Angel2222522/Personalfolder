@@ -10,11 +10,13 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.ByteArrayInputStream
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import java.util.UUID
 
 class BackupService(private val context: Context) {
     private val database = AppDatabase.get(context)
@@ -32,9 +34,15 @@ class BackupService(private val context: Context) {
                 paths.forEach { page ->
                     val source = File(page.encryptedPath)
                     if (source.isFile) {
+                        val plain = File(context.cacheDir, "backup_${UUID.randomUUID()}.tmp")
+                        FileCrypto.decryptToTemp(source, plain)
                         output.putNextEntry(ZipEntry("files/${page.documentId}/${page.pageIndex}.pf"))
-                        FileInputStream(source).use { it.copyTo(output) }
-                        output.closeEntry()
+                        try {
+                            FileInputStream(plain).use { it.copyTo(output) }
+                        } finally {
+                            output.closeEntry()
+                            plain.delete()
+                        }
                     }
                 }
             }
@@ -66,7 +74,7 @@ class BackupService(private val context: Context) {
         val checklist = database.checklistDao().getAll()
         val reminders = database.reminderDao().getAll()
         return JSONObject().apply {
-            put("formatVersion", 1)
+            put("formatVersion", 2)
             put("createdAt", System.currentTimeMillis())
             put("documents", JSONArray().apply { documents.forEach { put(documentJson(it)) } })
             put("pages", JSONArray().apply { pages.forEach { put(pageJson(it)) } })
@@ -90,7 +98,9 @@ class BackupService(private val context: Context) {
         }
         val manifest = entries["backup.json"]?.toString(Charsets.UTF_8)?.let(::JSONObject)
             ?: error("Το αντίγραφο δεν περιέχει έγκυρα δεδομένα.")
-        require(manifest.optInt("formatVersion", -1) == 1) { "Η έκδοση του αντιγράφου δεν υποστηρίζεται." }
+        val formatVersion = manifest.optInt("formatVersion", -1)
+        require(formatVersion in 1..2) { "Η έκδοση του αντιγράφου δεν υποστηρίζεται." }
+        val portableFiles = formatVersion >= 2
 
         val root = File(context.filesDir, "documents")
         FileCrypto.deleteRecursively(root)
@@ -101,18 +111,20 @@ class BackupService(private val context: Context) {
         val pageArray = manifest.optJSONArray("pages") ?: JSONArray()
         for (index in 0 until pageArray.length()) {
             val item = pageArray.getJSONObject(index)
-            val key = "files/${item.getString("documentId")}/${item.getInt("pageIndex")}.pf"
+            val documentId = requireSafeId(item.getString("documentId"))
+            val pageIndex = item.getInt("pageIndex").also { require(it >= 0) }
+            val key = "files/$documentId/$pageIndex.pf"
             val bytes = entries[key] ?: continue
-            val path = File(root, "${item.getString("documentId")}/page_${item.getInt("pageIndex")}.pf")
+            val path = File(root, "$documentId/page_$pageIndex.pf")
             path.parentFile?.mkdirs()
-            path.writeBytes(bytes)
-            fileMap["${item.getString("documentId")}:${item.getInt("pageIndex")}"] = path.absolutePath
-            pages += DocumentPageEntity(item.getString("documentId"), item.getInt("pageIndex"), path.absolutePath, item.optString("ocrText"))
+            if (portableFiles) ByteArrayInputStream(bytes).use { FileCrypto.encrypt(it, path) } else path.writeBytes(bytes)
+            fileMap["$documentId:$pageIndex"] = path.absolutePath
+            pages += DocumentPageEntity(documentId, pageIndex, path.absolutePath, item.optString("ocrText"))
         }
         val documentArray = manifest.optJSONArray("documents") ?: JSONArray()
         for (index in 0 until documentArray.length()) {
             val item = documentArray.getJSONObject(index)
-            val id = item.getString("id")
+            val id = requireSafeId(item.getString("id"))
             val firstPath = fileMap.entries.firstOrNull { it.key.startsWith("$id:") }?.value ?: continue
             documents += DocumentEntity(
                 id = id, title = item.getString("title"), originalFileName = item.getString("originalFileName"),
@@ -153,4 +165,9 @@ class BackupService(private val context: Context) {
     private fun parseEvents(array: JSONArray?): List<TimelineEventEntity> = buildList { for (i in 0 until (array?.length() ?: 0)) { val x = array!!.getJSONObject(i); add(TimelineEventEntity(x.getString("id"), x.getString("caseId"), x.getString("title"), x.optString("note"), x.optString("eventType", "manual"), x.getString("eventDate"), x.optLong("createdAt"))) } }
     private fun parseChecklist(array: JSONArray?): List<ChecklistItemEntity> = buildList { for (i in 0 until (array?.length() ?: 0)) { val x = array!!.getJSONObject(i); add(ChecklistItemEntity(x.getString("id"), x.getString("caseId"), x.getString("title"), x.optBoolean("isComplete"), x.optNullableString("linkedDocumentId"), x.optLong("createdAt"))) } }
     private fun parseReminders(array: JSONArray?): List<ReminderEntity> = buildList { for (i in 0 until (array?.length() ?: 0)) { val x = array!!.getJSONObject(i); add(ReminderEntity(x.getString("id"), x.getString("title"), x.getLong("dueAt"), x.optNullableString("documentId"), x.optNullableString("caseId"), x.optInt("leadDays"), x.optBoolean("isDone"))) } }
+
+    private fun requireSafeId(value: String): String {
+        require(value.matches(Regex("[A-Za-z0-9_-]{1,100}"))) { "Μη έγκυρο αναγνωριστικό στο αντίγραφο." }
+        return value
+    }
 }
