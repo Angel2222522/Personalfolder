@@ -29,7 +29,7 @@ class MainActivity : FragmentActivity() {
     private var sessionUnlocked = false
     private var lockPromptVisible = false
     private var pendingBackupPassword: String? = null
-    private val mainExecutor: Executor by lazy { ContextCompat.getMainExecutor(this) }
+    private val biometricExecutor: Executor by lazy { ContextCompat.getMainExecutor(this) }
 
     private val documentPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         uris.forEach { contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -133,7 +133,7 @@ class MainActivity : FragmentActivity() {
             return
         }
         lockPromptVisible = true
-        val prompt = BiometricPrompt(this, mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
+        val prompt = BiometricPrompt(this, biometricExecutor, object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 lockPromptVisible = false
                 onSuccess()
