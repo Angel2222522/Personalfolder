@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -30,7 +31,7 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
-    fun migratesV1ToV3WithoutLosingRowsOrRelations() {
+    fun migratesV1ToV3WithoutLosingRowsOrRelations() = runBlocking {
         val database = Room.databaseBuilder(context, AppDatabase::class.java, databaseName)
             .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
             .build()
