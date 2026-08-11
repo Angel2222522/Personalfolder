@@ -134,6 +134,7 @@ class BackupService(private val context: Context) {
             database.documentDao().insertAll(documents); database.documentPageDao().insertAll(pages); database.caseDao().insertAll(cases)
             relations.forEach { database.caseDocumentDao().insert(it) }; events.forEach { database.timelineDao().insert(it) }; checklist.forEach { database.checklistDao().insert(it) }; reminders.forEach { database.reminderDao().insert(it) }
         }
+        ReminderScheduler.rescheduleAll(context)
     }
 
     private fun documentJson(item: DocumentEntity) = JSONObject().apply {

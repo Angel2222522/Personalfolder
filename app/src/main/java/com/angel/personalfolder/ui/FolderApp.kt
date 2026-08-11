@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Search
@@ -85,7 +87,11 @@ import com.angel.personalfolder.data.CaseStatus
 import com.angel.personalfolder.data.ChecklistItemEntity
 import com.angel.personalfolder.data.DocumentEntity
 import com.angel.personalfolder.data.ProcessingState
+import com.angel.personalfolder.data.ReminderEntity
 import java.time.LocalDate
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 private enum class MainSection { HOME, DOCUMENTS, CASES, SETTINGS }
 
@@ -100,12 +106,14 @@ fun FolderApp(
     onDisableLock: () -> Unit,
     onCreateBackup: (String) -> Unit,
     onRestoreBackup: (String) -> Unit,
+    onRequestNotifications: () -> Unit,
     lockEnabled: Boolean
 ) {
     val documents by viewModel.documents.collectAsStateWithLifecycle()
     val cases by viewModel.cases.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
     val busy by viewModel.busy.collectAsStateWithLifecycle()
+    val reminders by viewModel.pendingReminders.collectAsStateWithLifecycle()
     var section by rememberSaveable { mutableStateOf(MainSection.HOME.name) }
     var selectedDocumentId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedCaseId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -159,12 +167,12 @@ fun FolderApp(
                 }
                 selectedCaseId != null -> {
                     val caseEntity = cases.firstOrNull { it.id == selectedCaseId }
-                    if (caseEntity != null) CaseDetailScreen(caseEntity, viewModel)
+                    if (caseEntity != null) CaseDetailScreen(caseEntity, documents, viewModel, onOpenDocument)
                 }
-                section == MainSection.HOME.name -> HomeScreen(documents, cases, onImport, onCamera, { section = MainSection.DOCUMENTS.name }, { section = MainSection.CASES.name }, { selectedDocumentId = it }, { selectedCaseId = it })
+                section == MainSection.HOME.name -> HomeScreen(documents, cases, reminders, onImport, onCamera, { section = MainSection.DOCUMENTS.name }, { section = MainSection.CASES.name }, { selectedDocumentId = it }, { selectedCaseId = it }, viewModel::markReminderDone)
                 section == MainSection.DOCUMENTS.name -> DocumentsScreen(documents, query, busy, viewModel::setQuery, { selectedDocumentId = it }, onImport)
                 section == MainSection.CASES.name -> CasesScreen(cases, { selectedCaseId = it }, { showCreateCase = true })
-                else -> SettingsScreen(lockEnabled, onEnableLock, onDisableLock, onBackup = { backupAction = "create" }, onRestore = { backupAction = "restore" })
+                else -> SettingsScreen(lockEnabled, onEnableLock, onDisableLock, onRequestNotifications, onBackup = { backupAction = "create" }, onRestore = { backupAction = "restore" })
             }
             if (showCreateCase) {
                 CreateCaseDialog(
@@ -190,12 +198,14 @@ fun FolderApp(
 private fun HomeScreen(
     documents: List<DocumentEntity>,
     cases: List<CaseEntity>,
+    reminders: List<ReminderEntity>,
     onImport: () -> Unit,
     onCamera: () -> Unit,
     onDocuments: () -> Unit,
     onCases: () -> Unit,
     onDocument: (String) -> Unit,
-    onCase: (String) -> Unit
+    onCase: (String) -> Unit,
+    onReminderDone: (String) -> Unit
 ) {
     val attention = documents.filter { document ->
         document.expiryDate?.let { runCatching { LocalDate.parse(it).isBefore(LocalDate.now().plusDays(31)) }.getOrDefault(false) } == true
@@ -230,6 +240,12 @@ private fun HomeScreen(
                         }
                     }
                 }
+            }
+        }
+        if (reminders.isNotEmpty()) {
+            item { SectionHeader("Υπενθυμίσεις", Icons.Default.CalendarMonth, {}) }
+            items(reminders.take(3), key = { it.id }) { reminder ->
+                ReminderCard(reminder, onDone = { onReminderDone(reminder.id) })
             }
         }
         item { SectionHeader("Πρόσφατα έγγραφα", Icons.Default.Description, onDocuments) }
@@ -325,18 +341,35 @@ private fun DocumentDetailScreen(document: DocumentEntity, viewModel: FolderView
 }
 
 @Composable
-private fun CaseDetailScreen(caseEntity: CaseEntity, viewModel: FolderViewModel) {
+private fun CaseDetailScreen(caseEntity: CaseEntity, documents: List<DocumentEntity>, viewModel: FolderViewModel, onOpenDocument: (String) -> Unit) {
     val timeline by viewModel.timeline(caseEntity.id).collectAsState(initial = emptyList())
     val checklist by viewModel.checklist(caseEntity.id).collectAsState(initial = emptyList())
+    val attachedDocuments by viewModel.caseDocuments(caseEntity.id).collectAsState(initial = emptyList())
     var statusMenu by remember { mutableStateOf(false) }
     var addItem by remember { mutableStateOf(false) }
     var addEvent by remember { mutableStateOf(false) }
+    var addDocument by remember { mutableStateOf(false) }
     LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { Text(caseEntity.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); if (caseEntity.description.isNotBlank()) Text(caseEntity.description, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         item {
             Box {
                 AssistChip(onClick = { statusMenu = true }, label = { Text(caseEntity.status) }, leadingIcon = { Icon(Icons.Default.MoreVert, null, Modifier.size(16.dp)) })
                 DropdownMenu(expanded = statusMenu, onDismissRequest = { statusMenu = false }) { FolderViewModel.caseStatuses.forEach { status -> DropdownMenuItem(text = { Text(status) }, onClick = { statusMenu = false; viewModel.updateCaseStatus(caseEntity.id, status) }) } }
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Συνδεδεμένα έγγραφα", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                IconButton(onClick = { addDocument = true }) { Icon(Icons.Default.Add, "Σύνδεση εγγράφου") }
+            }
+            if (attachedDocuments.isEmpty()) Text("Δεν έχεις συνδέσει έγγραφα.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else for (document in attachedDocuments) {
+                Row(Modifier.fillMaxWidth().clickable { onOpenDocument(document.id) }.padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Description, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(10.dp))
+                    Text(document.title, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    IconButton(onClick = { viewModel.detachDocumentFromCase(caseEntity.id, document.id) }) { Icon(Icons.Default.Delete, "Αποσύνδεση") }
+                }
             }
         }
         item {
@@ -352,10 +385,15 @@ private fun CaseDetailScreen(caseEntity: CaseEntity, viewModel: FolderViewModel)
     }
     if (addItem) SimpleInputDialog("Νέο στοιχείο", "Τι χρειάζεται;", onDismiss = { addItem = false }) { viewModel.addChecklistItem(caseEntity.id, it); addItem = false }
     if (addEvent) EventDialog(onDismiss = { addEvent = false }) { title, note -> viewModel.addTimelineEvent(caseEntity.id, title, note); addEvent = false }
+    if (addDocument) AttachDocumentDialog(
+        documents = documents.filterNot { candidate -> attachedDocuments.any { it.id == candidate.id } },
+        onDismiss = { addDocument = false },
+        onAttach = { documentId -> viewModel.attachDocumentToCase(caseEntity.id, documentId); addDocument = false }
+    )
 }
 
 @Composable
-private fun SettingsScreen(lockEnabled: Boolean, onEnableLock: () -> Unit, onDisableLock: () -> Unit, onBackup: () -> Unit, onRestore: () -> Unit) {
+private fun SettingsScreen(lockEnabled: Boolean, onEnableLock: () -> Unit, onDisableLock: () -> Unit, onRequestNotifications: () -> Unit, onBackup: () -> Unit, onRestore: () -> Unit) {
     LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { Text("Ρυθμίσεις", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
         item {
@@ -364,6 +402,7 @@ private fun SettingsScreen(lockEnabled: Boolean, onEnableLock: () -> Unit, onDis
                     Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(10.dp)); Text("Ιδιωτικότητα και ασφάλεια", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
                     Text("Τα έγγραφα αποθηκεύονται ιδιωτικά και κρυπτογραφημένα στη συσκευή. Δεν χρησιμοποιείται λογαριασμός, διαφημίσεις ή διακομιστής.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Button(onClick = if (lockEnabled) onDisableLock else onEnableLock, modifier = Modifier.fillMaxWidth()) { Text(if (lockEnabled) "Απενεργοποίηση κλειδώματος" else "Ενεργοποίηση κλειδώματος") }
+                    OutlinedButton(onClick = onRequestNotifications, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Notifications, null); Spacer(Modifier.width(8.dp)); Text("Ενεργοποίηση ειδοποιήσεων λήξης") }
                 }
             }
         }
@@ -408,6 +447,24 @@ private fun StatusChip(state: String) { val label = when (state) { ProcessingSta
 private fun EmptyState(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector) { Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(30.dp)) { Icon(icon, null, modifier = Modifier.size(42.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = .65f)); Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
 
 @Composable
+private fun ReminderCard(reminder: ReminderEntity, onDone: () -> Unit) {
+    val date = remember(reminder.dueAt) {
+        Instant.ofEpochMilli(reminder.dueAt).atZone(ZoneId.systemDefault()).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.CalendarMonth, null, tint = MaterialTheme.colorScheme.error)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(reminder.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Προθεσμία: $date", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+            }
+            IconButton(onClick = onDone) { Icon(Icons.Default.Check, "Ολοκληρώθηκε") }
+        }
+    }
+}
+
+@Composable
 private fun LinearProcessing() { androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp)) }
 
 @Composable
@@ -418,6 +475,25 @@ private fun TimelineRow(event: com.angel.personalfolder.data.TimelineEventEntity
 
 @Composable
 private fun CreateCaseDialog(onDismiss: () -> Unit, onSave: (String, String) -> Unit) { var title by remember { mutableStateOf("") }; var description by remember { mutableStateOf("") }; AlertDialog(onDismissRequest = onDismiss, title = { Text("Νέα υπόθεση") }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedTextField(title, { title = it }, label = { Text("Τίτλος") }, singleLine = true); OutlinedTextField(description, { description = it }, label = { Text("Περιγραφή") }, minLines = 3) } }, confirmButton = { TextButton(onClick = { onSave(title, description) }, enabled = title.isNotBlank()) { Text("Αποθήκευση") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Ακύρωση") } }) }
+
+@Composable
+private fun AttachDocumentDialog(documents: List<DocumentEntity>, onDismiss: () -> Unit, onAttach: (String) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Σύνδεση εγγράφου") },
+        text = {
+            if (documents.isEmpty()) Text("Όλα τα έγγραφα είναι ήδη συνδεδεμένα ή δεν υπάρχουν διαθέσιμα έγγραφα.")
+            else LazyColumn(Modifier.heightIn(max = 300.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                items(documents, key = { it.id }) { document ->
+                    TextButton(onClick = { onAttach(document.id) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(document.title, modifier = Modifier.fillMaxWidth(), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Κλείσιμο") } }
+    )
+}
 
 @Composable
 private fun DocumentEditDialog(document: DocumentEntity, viewModel: FolderViewModel, onDismiss: () -> Unit) { var title by remember { mutableStateOf(document.title) }; var expiry by remember { mutableStateOf(document.expiryDate.orEmpty()) }; var category by remember { mutableStateOf(document.category) }; var menu by remember { mutableStateOf(false) }; val categories = listOf("Ταυτότητα / προσωπικά", "Μετανάστευση / άδειες", "Κατοικία", "Δημόσιες υπηρεσίες", "Εργασία", "Οικονομικά", "Λογαριασμοί", "Υγεία", "Συμβόλαια", "Άλλα"); AlertDialog(onDismissRequest = onDismiss, title = { Text("Επεξεργασία") }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedTextField(title, { title = it }, label = { Text("Τίτλος") }, singleLine = true); Box { OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth()) { Text(category, modifier = Modifier.weight(1f)); Icon(Icons.Default.MoreVert, null) }; DropdownMenu(menu, { menu = false }) { categories.forEach { DropdownMenuItem(text = { Text(it) }, onClick = { category = it; menu = false }) } } }; OutlinedTextField(expiry, { expiry = it }, label = { Text("Λήξη (YYYY-MM-DD)") }, singleLine = true) } }, confirmButton = { TextButton(onClick = { viewModel.updateDocument(document.id, title, category, expiry.trim().ifBlank { null }); onDismiss() }) { Text("Αποθήκευση") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Ακύρωση") } }) }

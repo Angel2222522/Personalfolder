@@ -85,6 +85,19 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
 
     fun timeline(caseId: String) = repository.timeline(caseId)
     fun checklist(caseId: String) = repository.checklist(caseId)
+    fun caseDocuments(caseId: String) = repository.caseDocuments(caseId)
+
+    fun attachDocumentToCase(caseId: String, documentId: String) = viewModelScope.launch {
+        repository.attachDocumentToCase(caseId, documentId)
+    }
+
+    fun detachDocumentFromCase(caseId: String, documentId: String) = viewModelScope.launch {
+        repository.detachDocumentFromCase(caseId, documentId)
+    }
+
+    fun markReminderDone(id: String) = viewModelScope.launch {
+        repository.markReminderDone(id)
+    }
 
     fun clearSearch() { _query.value = "" }
 

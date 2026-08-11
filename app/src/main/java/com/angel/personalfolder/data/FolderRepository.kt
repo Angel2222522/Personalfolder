@@ -22,6 +22,7 @@ class FolderRepository(private val context: Context) {
     suspend fun document(id: String) = database.documentDao().getById(id)
     fun timeline(caseId: String) = database.timelineDao().observeForCase(caseId)
     fun checklist(caseId: String) = database.checklistDao().observeForCase(caseId)
+    fun caseDocuments(caseId: String) = database.caseDocumentDao().observeDocumentsForCase(caseId)
 
     suspend fun importUris(uris: List<Uri>): String? {
         if (uris.isEmpty()) return null
@@ -72,12 +73,14 @@ class FolderRepository(private val context: Context) {
 
     suspend fun updateDocumentBasics(id: String, title: String, category: String, expiryDate: String?) {
         database.documentDao().updateBasics(id, title.trim().ifBlank { "Έγγραφο" }, category, expiryDate, System.currentTimeMillis())
-        if (expiryDate != null) ReminderScheduler.scheduleForDocument(context, id, title, expiryDate)
+        ReminderScheduler.replaceForDocument(context, id, title.trim().ifBlank { "Έγγραφο" }, expiryDate)
     }
 
     suspend fun deleteDocument(id: String) {
         val document = database.documentDao().getById(id)
         database.withTransaction {
+            database.caseDocumentDao().deleteForDocument(id)
+            database.reminderDao().deleteForDocument(id)
             database.documentPageDao().deleteForDocument(id)
             database.documentDao().deleteById(id)
         }
@@ -112,6 +115,17 @@ class FolderRepository(private val context: Context) {
         )
     }
 
+    suspend fun attachDocumentToCase(caseId: String, documentId: String) {
+        database.caseDocumentDao().insert(CaseDocumentCrossRef(caseId, documentId))
+        database.caseDao().getById(caseId)?.let { caseEntity ->
+            database.caseDao().updateStatus(caseId, caseEntity.status, System.currentTimeMillis())
+        }
+    }
+
+    suspend fun detachDocumentFromCase(caseId: String, documentId: String) {
+        database.caseDocumentDao().delete(caseId, documentId)
+    }
+
     suspend fun addTimelineEvent(caseId: String, title: String, note: String) {
         database.timelineDao().insert(
             TimelineEventEntity(
@@ -126,6 +140,8 @@ class FolderRepository(private val context: Context) {
     }
 
     suspend fun setChecklistComplete(id: String, complete: Boolean) = database.checklistDao().setComplete(id, complete)
+
+    suspend fun markReminderDone(id: String) = database.reminderDao().markDone(id)
 
     private fun displayName(uri: Uri): String? {
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->

@@ -7,6 +7,7 @@ import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import com.angel.personalfolder.data.AppDatabase
 import com.angel.personalfolder.data.ProcessingState
+import com.angel.personalfolder.data.ReminderScheduler
 import com.angel.personalfolder.security.FileCrypto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -67,6 +68,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                 error = null,
                 updatedAt = System.currentTimeMillis()
             )
+            ReminderScheduler.replaceForDocument(context, document.id, document.title, metadata.expiryDate)
             Result.success(Unit)
         } catch (error: Throwable) {
             database.documentDao().updateProcessing(

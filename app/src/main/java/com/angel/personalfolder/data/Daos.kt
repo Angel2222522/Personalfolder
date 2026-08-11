@@ -115,8 +115,17 @@ interface CaseDocumentDao {
     @Query("SELECT * FROM case_documents")
     suspend fun getAll(): List<CaseDocumentCrossRef>
 
+    @Query("SELECT documents.* FROM documents INNER JOIN case_documents ON documents.id = case_documents.documentId WHERE case_documents.caseId = :caseId ORDER BY documents.updatedAt DESC")
+    fun observeDocumentsForCase(caseId: String): Flow<List<DocumentEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(relation: CaseDocumentCrossRef)
+
+    @Query("DELETE FROM case_documents WHERE caseId = :caseId AND documentId = :documentId")
+    suspend fun delete(caseId: String, documentId: String)
+
+    @Query("DELETE FROM case_documents WHERE documentId = :documentId")
+    suspend fun deleteForDocument(documentId: String)
 
     @Query("DELETE FROM case_documents")
     suspend fun deleteAll()
@@ -174,6 +183,9 @@ interface ReminderDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(reminders: List<ReminderEntity>)
+
+    @Query("DELETE FROM reminders WHERE documentId = :documentId")
+    suspend fun deleteForDocument(documentId: String)
 
     @Query("UPDATE reminders SET isDone = 1 WHERE id = :id")
     suspend fun markDone(id: String)

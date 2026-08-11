@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
@@ -40,6 +41,8 @@ class MainActivity : FragmentActivity() {
         if (granted) launchCamera()
     }
 
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     private val cameraCapture = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         val file = cameraFile
         if (success && file != null) viewModel.importUris(listOf(FileProvider.getUriForFile(this, "$packageName.fileprovider", file)))
@@ -74,6 +77,7 @@ class MainActivity : FragmentActivity() {
                     onDisableLock = { authenticate { settings.edit().putBoolean(KEY_LOCK, false).apply() } },
                     onCreateBackup = { password -> pendingBackupPassword = password; backupCreator.launch("personal-folder-backup.pfb") },
                     onRestoreBackup = { password -> pendingBackupPassword = password; backupPicker.launch(arrayOf("application/octet-stream", "application/zip", "*/*")) },
+                    onRequestNotifications = ::requestNotificationPermission,
                     lockEnabled = settings.getBoolean(KEY_LOCK, false)
                 )
             }
@@ -93,6 +97,12 @@ class MainActivity : FragmentActivity() {
     private fun takePhoto() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera()
         else cameraPermission.launch(Manifest.permission.CAMERA)
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private fun launchCamera() {
