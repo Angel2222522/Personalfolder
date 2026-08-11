@@ -1,6 +1,7 @@
 package com.angel.personalfolder.processing
 
 import java.text.SimpleDateFormat
+import java.text.Normalizer
 import java.util.Locale
 
 data class ExtractedMetadata(
@@ -34,12 +35,12 @@ object MetadataExtractor {
         val normalized = text.replace("\u0000", " ").trim()
         val lines = normalized.lines().map { it.trim() }.filter { it.length >= 3 }
         val title = lines.firstOrNull()?.take(100)?.ifBlank { fallbackTitle } ?: fallbackTitle
-        val lower = normalized.lowercase(Locale.ROOT)
-        val category = categoryRules.entries.firstOrNull { (_, words) -> words.any(lower::contains) }?.key
+        val folded = foldGreek(normalized)
+        val category = categoryRules.entries.firstOrNull { (_, words) -> words.any { folded.contains(foldGreek(it)) } }?.key
             ?: "Άλλα"
         val provider = lines.firstOrNull { line ->
-            val value = line.lowercase(Locale.ROOT)
-            listOf("υπουργ", "δήμ", "ααδε", "gov", "δεη", "τράπεζ", "οργανισμ").any(value::contains)
+            val value = foldGreek(line)
+            listOf("υπουργ", "δημ", "ααδε", "gov", "δεη", "τραπεζ", "οργανισμ").any(value::contains)
         }?.take(120).orEmpty()
         val dates = dateRegex.findAll(normalized).mapNotNull { normalizeDate(it.value) }.distinct().toList()
         val expiry = dates.firstOrNull { date ->
@@ -53,7 +54,7 @@ object MetadataExtractor {
         val issued = dates.firstOrNull { it != expiry }
         val protocol = protocolRegex.find(normalized)?.groupValues?.getOrNull(1)
         val keywords = categoryRules.flatMap { (key, words) ->
-            if (lower.contains(key.lowercase())) listOf(key) else words.filter(lower::contains)
+            if (folded.contains(foldGreek(key))) listOf(key) else words.filter { folded.contains(foldGreek(it)) }
         }.distinct().take(12)
         val json = buildString {
             append('{')
@@ -71,6 +72,9 @@ object MetadataExtractor {
     }
 
     private fun jsonValue(value: String?): String = value?.let { "\"${jsonEscape(it)}\"" } ?: "null"
+
+    private fun foldGreek(value: String): String = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFD)
+        .replace(Regex("\\p{M}+"), "")
 
     private fun jsonEscape(value: String): String = buildString {
         value.forEach { character ->
