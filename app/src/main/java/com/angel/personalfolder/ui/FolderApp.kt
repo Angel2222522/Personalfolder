@@ -282,11 +282,13 @@ private fun DocumentsScreen(
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         OutlinedTextField(value = query, onValueChange = onQuery, modifier = Modifier.fillMaxWidth().padding(top = 12.dp), placeholder = { Text("Αναζήτηση σε τίτλους, OCR και στοιχεία") }, leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true, trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { onQuery("") }) { Text("Καθαρισμός") } })
         if (selectedIds.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Επιλεγμένα: ${selectedIds.size}", modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                OutlinedButton(onClick = { onExportDocuments(selectedIds.toList()) }) { Text("Εξαγωγή ZIP") }
-                OutlinedButton(onClick = { onExportPdf(selectedIds.toList()) }) { Text("Ενιαίο PDF") }
-                TextButton(onClick = { selectedIds = emptySet() }) { Text("Καθαρισμός") }
+            Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Επιλεγμένα: ${selectedIds.size}", fontWeight = FontWeight.SemiBold)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { onExportDocuments(selectedIds.toList()) }, modifier = Modifier.weight(1f)) { Text("Εξαγωγή ZIP") }
+                    OutlinedButton(onClick = { onExportPdf(selectedIds.toList()) }, modifier = Modifier.weight(1f)) { Text("Ενιαίο PDF") }
+                }
+                TextButton(onClick = { selectedIds = emptySet() }, modifier = Modifier.align(Alignment.End)) { Text("Καθαρισμός επιλογής") }
             }
         }
         if (busy) LinearProcessing()
