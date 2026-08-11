@@ -6,7 +6,10 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.Build
+import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
@@ -17,11 +20,15 @@ import androidx.lifecycle.lifecycleScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.angel.personalfolder.security.FileCrypto
+import com.angel.personalfolder.security.TempFileCleaner
+import com.angel.personalfolder.data.ExportService
+import com.angel.personalfolder.processing.ScannerImageProcessor
 import com.angel.personalfolder.ui.FolderApp
 import com.angel.personalfolder.ui.FolderViewModel
 import com.angel.personalfolder.ui.PersonalFolderTheme
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.Executor
 
@@ -36,11 +43,18 @@ class MainActivity : FragmentActivity() {
     private var pendingBackupPassword: String? = null
     private var pendingExportDocumentIds: List<String> = emptyList()
     private var pendingPdfDocumentIds: List<String> = emptyList()
+    private var scannerFiles by mutableStateOf<List<File>>(emptyList())
+    private var scannerOpen by mutableStateOf(false)
+    private var lastIncomingIntentKey: String? = null
+    private var pendingIncomingUris: List<Uri> = emptyList()
     private val biometricExecutor: Executor by lazy { ContextCompat.getMainExecutor(this) }
+    private val exportService by lazy { ExportService(this) }
 
     private val documentPicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         uris.forEach { uri -> runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
-        viewModel.importUris(uris)
+        viewModel.importUris(uris) {
+            uris.forEach { uri -> runCatching { contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
+        }
     }
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -52,8 +66,8 @@ class MainActivity : FragmentActivity() {
     private val cameraCapture = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         val file = cameraFile
         if (success && file != null) {
-            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-            viewModel.importUris(listOf(uri)) { file.delete() }
+            scannerFiles = scannerFiles + file
+            scannerOpen = true
         }
         else file?.delete()
         cameraFile = null
@@ -86,9 +100,15 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        File(cacheDir, "share").deleteRecursively()
-        File(cacheDir, "camera").deleteRecursively()
+        enableEdgeToEdge()
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        lifecycleScope.launch { TempFileCleaner.recover(this@MainActivity) }
         lockEnabled = settings.getBoolean(KEY_LOCK, false)
+        if (lockEnabled && !canAuthenticate()) {
+            // An already-enabled lock must fail closed. Do not silently weaken the
+            // persisted policy when a credential is temporarily unavailable.
+            Toast.makeText(this, "Το κλείδωμα παραμένει ενεργό, αλλά δεν υπάρχει διαθέσιμη ασφαλής ταυτοποίηση στη συσκευή.", Toast.LENGTH_LONG).show()
+        }
         if (savedInstanceState == null) handleIncomingIntent(intent)
         setContent {
             PersonalFolderTheme {
@@ -98,13 +118,25 @@ class MainActivity : FragmentActivity() {
                     onCamera = ::takePhoto,
                     onOpenDocument = ::openDocument,
                     onShareDocument = ::shareDocument,
-                    onEnableLock = { authenticate { settings.edit().putBoolean(KEY_LOCK, true).apply(); lockEnabled = true; sessionUnlocked = true } },
-                    onDisableLock = { authenticate { settings.edit().putBoolean(KEY_LOCK, false).apply(); lockEnabled = false; sessionUnlocked = true } },
+                    onEnableLock = { authenticate(
+                        onSuccess = { settings.edit().putBoolean(KEY_LOCK, true).apply(); lockEnabled = true; sessionUnlocked = true },
+                        onFailure = ::showAuthMessage
+                    ) },
+                    onDisableLock = { authenticate(
+                        onSuccess = { settings.edit().putBoolean(KEY_LOCK, false).apply(); lockEnabled = false; sessionUnlocked = true },
+                        onFailure = ::showAuthMessage
+                    ) },
                     onCreateBackup = { password -> pendingBackupPassword = password; backupCreator.launch("personal-folder-backup.pfb") },
                     onRestoreBackup = { password -> pendingBackupPassword = password; backupPicker.launch(arrayOf("application/octet-stream", "application/zip", "*/*")) },
                     onRequestNotifications = ::requestNotificationPermission,
                     onExportDocuments = { documentIds -> pendingExportDocumentIds = documentIds; exportCreator.launch("personal-folder-export.zip") },
                     onExportPdf = { documentIds -> pendingPdfDocumentIds = documentIds; pdfExportCreator.launch("personal-folder-export.pdf") },
+                    scannerOpen = scannerOpen,
+                    scannerPageUris = scannerFiles.map { FileProvider.getUriForFile(this, "$packageName.fileprovider", it) },
+                    onScannerAddPage = { launchCamera() },
+                    onScannerRetryLast = ::retryLastScanPage,
+                    onScannerFinish = ::finishScanner,
+                    onScannerCancel = ::cancelScanner,
                     lockEnabled = lockEnabled,
                     locked = lockEnabled && !sessionUnlocked
                 )
@@ -114,7 +146,12 @@ class MainActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (lockEnabled && !sessionUnlocked && !lockPromptVisible) authenticate { sessionUnlocked = true }
+        if (lockEnabled && !canAuthenticate()) {
+            sessionUnlocked = false
+            showAuthMessage("Το κλείδωμα παραμένει ενεργό. Ενεργοποίησε ξανά μια ασφαλή συσκευή ταυτοποίησης για να ξεκλειδώσεις.")
+        } else if (lockEnabled && !sessionUnlocked && !lockPromptVisible) {
+            authenticate(onSuccess = { sessionUnlocked = true; flushPendingIncoming() }, onFailure = ::showAuthMessage)
+        }
     }
 
     override fun onStop() {
@@ -129,6 +166,7 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun takePhoto() {
+        scannerOpen = true
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera()
         else cameraPermission.launch(Manifest.permission.CAMERA)
     }
@@ -148,54 +186,81 @@ class MainActivity : FragmentActivity() {
 
     private fun handleIncomingIntent(incoming: Intent?) {
         val uris = when (incoming?.action) {
-            Intent.ACTION_SEND -> listOfNotNull(incoming.data ?: incoming.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+            Intent.ACTION_SEND -> listOfNotNull(incoming.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) ?: incoming.data)
             Intent.ACTION_SEND_MULTIPLE -> incoming.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
             else -> emptyList()
+        }.distinct()
+        if (uris.size > MAX_INCOMING_URIS) {
+            showAuthMessage("Η εισαγωγή από share sheet περιορίζεται σε $MAX_INCOMING_URIS αρχεία ανά αποστολή.")
+            return
         }
-        if (uris.isNotEmpty()) viewModel.importUris(uris)
+        val key = incoming?.action.orEmpty() + ":" + uris.joinToString("|")
+        if (uris.isNotEmpty() && key != lastIncomingIntentKey) {
+            lastIncomingIntentKey = key
+            if (lockEnabled && !sessionUnlocked) {
+                pendingIncomingUris = (pendingIncomingUris + uris).distinct().take(MAX_PENDING_INCOMING_URIS)
+                if (pendingIncomingUris.size >= MAX_PENDING_INCOMING_URIS) showAuthMessage("Υπάρχουν ήδη πολλές εισαγωγές σε αναμονή για ξεκλείδωμα.")
+            }
+            else viewModel.importUris(uris)
+        }
+    }
+
+    private fun flushPendingIncoming() {
+        val queued = pendingIncomingUris
+        pendingIncomingUris = emptyList()
+        if (queued.isNotEmpty()) viewModel.importUris(queued)
     }
 
     private fun openDocument(documentId: String) {
         lifecycleScope.launch {
-            val document = viewModel.getDocument(documentId) ?: return@launch
-            val source = File(document.encryptedPath)
-            val extension = document.originalFileName.substringAfterLast('.', "bin")
-            val shareFile = File(cacheDir, "share/${document.id}.$extension").apply { parentFile?.mkdirs() }
+            var shareFile: File? = null
             runCatching {
-                FileCrypto.decryptToTemp(source, shareFile)
-                val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", shareFile)
+                check(!lockEnabled || sessionUnlocked) { "Η συνεδρία κλειδώθηκε. Ταυτοποιήσου ξανά." }
+                val document = viewModel.getDocument(documentId) ?: error("Το έγγραφο δεν βρέθηκε.")
+                val file = exportService.createSharePdf(document.id)
+                shareFile = file
+                check(!lockEnabled || sessionUnlocked) { "Η συνεδρία κλειδώθηκε πριν ολοκληρωθεί το άνοιγμα." }
+                val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", file)
                 val intent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, document.mimeType.ifBlank { "application/octet-stream" })
+                    setDataAndType(uri, "application/pdf")
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 startActivity(Intent.createChooser(intent, getString(R.string.open_original)))
-            }
+                TempFileCleaner.scheduleDeletion(file)
+                shareFile = null
+            }.onFailure { showAuthMessage(it.message ?: "Δεν ήταν δυνατό το άνοιγμα του εγγράφου.") }
+            shareFile?.delete()
         }
     }
 
     private fun shareDocument(documentId: String) {
         lifecycleScope.launch {
-            val document = viewModel.getDocument(documentId) ?: return@launch
-            val extension = document.originalFileName.substringAfterLast('.', "bin")
-            val shareFile = File(cacheDir, "share/${document.id}.$extension").apply { parentFile?.mkdirs() }
+            var shareFile: File? = null
             runCatching {
-                FileCrypto.decryptToTemp(File(document.encryptedPath), shareFile)
-                val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", shareFile)
+                check(!lockEnabled || sessionUnlocked) { "Η συνεδρία κλειδώθηκε. Ταυτοποιήσου ξανά." }
+                val document = viewModel.getDocument(documentId) ?: error("Το έγγραφο δεν βρέθηκε.")
+                val file = exportService.createSharePdf(document.id)
+                shareFile = file
+                check(!lockEnabled || sessionUnlocked) { "Η συνεδρία κλειδώθηκε πριν ολοκληρωθεί η κοινοποίηση." }
+                val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", file)
                 val intent = Intent(Intent.ACTION_SEND).apply {
-                    type = document.mimeType.ifBlank { "application/octet-stream" }
+                    type = "application/pdf"
                     putExtra(Intent.EXTRA_STREAM, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 startActivity(Intent.createChooser(intent, getString(R.string.share_document)))
-            }
+                TempFileCleaner.scheduleDeletion(file)
+                shareFile = null
+            }.onFailure { showAuthMessage(it.message ?: "Δεν ήταν δυνατή η κοινοποίηση.") }
+            shareFile?.delete()
         }
     }
 
-    private fun authenticate(onSuccess: () -> Unit) {
+    private fun authenticate(onSuccess: () -> Unit, onFailure: (String) -> Unit) {
         if (lockPromptVisible) return
         val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
         if (BiometricManager.from(this).canAuthenticate(authenticators) != BiometricManager.BIOMETRIC_SUCCESS) {
-            onSuccess()
+            onFailure("Δεν υπάρχει διαθέσιμη ασφαλής ταυτοποίηση στη συσκευή. Το κλείδωμα δεν ενεργοποιήθηκε.")
             return
         }
         lockPromptVisible = true
@@ -207,6 +272,7 @@ class MainActivity : FragmentActivity() {
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                 lockPromptVisible = false
+                onFailure(errString.toString())
             }
         })
         prompt.authenticate(
@@ -218,5 +284,60 @@ class MainActivity : FragmentActivity() {
         )
     }
 
-    companion object { private const val KEY_LOCK = "biometric_lock" }
+    private fun canAuthenticate(): Boolean {
+        val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        return BiometricManager.from(this).canAuthenticate(authenticators) == BiometricManager.BIOMETRIC_SUCCESS
+    }
+
+    private fun showAuthMessage(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
+
+    private fun retryLastScanPage() {
+        scannerFiles.lastOrNull()?.delete()
+        scannerFiles = scannerFiles.dropLast(1)
+        launchCamera()
+    }
+
+    private fun cancelScanner() {
+        scannerFiles.forEach(File::delete)
+        scannerFiles = emptyList()
+        scannerOpen = false
+    }
+
+    private fun finishScanner() {
+        val rawFiles = scannerFiles.toList()
+        if (rawFiles.isEmpty()) {
+            scannerOpen = false
+            return
+        }
+        scannerOpen = false
+        lifecycleScope.launch(Dispatchers.IO) {
+            val processed = mutableListOf<File>()
+            try {
+                rawFiles.forEachIndexed { index, raw ->
+                    val output = File(cacheDir, "scanner/processed_${System.nanoTime()}_$index.jpg")
+                    processed += ScannerImageProcessor.enhance(raw, output)
+                }
+                val uris = processed.map { FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", it) }
+                withContext(Dispatchers.Main) {
+                    viewModel.importUris(uris) {
+                        rawFiles.forEach(File::delete)
+                        processed.forEach(File::delete)
+                        scannerFiles = emptyList()
+                    }
+                }
+            } catch (error: Throwable) {
+                rawFiles.forEach(File::delete)
+                processed.forEach(File::delete)
+                withContext(Dispatchers.Main) { showAuthMessage(error.message ?: "Δεν ήταν δυνατή η επεξεργασία της σάρωσης."); scannerFiles = emptyList() }
+            }
+        }
+    }
+
+    companion object {
+        private const val KEY_LOCK = "biometric_lock"
+        private const val MAX_INCOMING_URIS = 100
+        private const val MAX_PENDING_INCOMING_URIS = 100
+    }
 }

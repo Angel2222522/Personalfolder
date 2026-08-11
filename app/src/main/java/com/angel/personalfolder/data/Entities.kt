@@ -1,7 +1,9 @@
 package com.angel.personalfolder.data
 
 import androidx.room.Entity
+import androidx.room.ForeignKey
 import androidx.room.Index
+import androidx.room.ColumnInfo
 
 @Entity(
     tableName = "documents",
@@ -24,6 +26,7 @@ data class DocumentEntity(
     val extractedMetadataJson: String = "",
     val processingState: String = ProcessingState.QUEUED,
     val processingError: String? = null,
+    @ColumnInfo(defaultValue = "0") val metadataManuallyEdited: Boolean = false,
     val createdAt: Long,
     val updatedAt: Long
 )
@@ -31,13 +34,23 @@ data class DocumentEntity(
 @Entity(
     tableName = "document_pages",
     primaryKeys = ["documentId", "pageIndex"],
+    foreignKeys = [
+        ForeignKey(
+            entity = DocumentEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["documentId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
     indices = [Index("documentId")]
 )
 data class DocumentPageEntity(
     val documentId: String,
     val pageIndex: Int,
     val encryptedPath: String,
-    val ocrText: String = ""
+    val ocrText: String = "",
+    @ColumnInfo(defaultValue = "''") val sourceFileName: String = "",
+    @ColumnInfo(defaultValue = "'application/octet-stream'") val mimeType: String = "application/octet-stream"
 )
 
 @Entity(tableName = "cases", indices = [Index("updatedAt"), Index("status")])
@@ -57,6 +70,20 @@ data class CaseEntity(
 @Entity(
     tableName = "case_documents",
     primaryKeys = ["caseId", "documentId"],
+    foreignKeys = [
+        ForeignKey(
+            entity = CaseEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["caseId"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = DocumentEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["documentId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
     indices = [Index("caseId"), Index("documentId")]
 )
 data class CaseDocumentCrossRef(
@@ -66,6 +93,14 @@ data class CaseDocumentCrossRef(
 
 @Entity(
     tableName = "timeline_events",
+    foreignKeys = [
+        ForeignKey(
+            entity = CaseEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["caseId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
     indices = [Index("caseId"), Index("createdAt")]
 )
 data class TimelineEventEntity(
@@ -80,7 +115,21 @@ data class TimelineEventEntity(
 
 @Entity(
     tableName = "checklist_items",
-    indices = [Index("caseId")]
+    foreignKeys = [
+        ForeignKey(
+            entity = CaseEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["caseId"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = DocumentEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["linkedDocumentId"],
+            onDelete = ForeignKey.SET_NULL
+        )
+    ],
+    indices = [Index("caseId"), Index("linkedDocumentId")]
 )
 data class ChecklistItemEntity(
     @androidx.room.PrimaryKey val id: String,
@@ -93,6 +142,20 @@ data class ChecklistItemEntity(
 
 @Entity(
     tableName = "reminders",
+    foreignKeys = [
+        ForeignKey(
+            entity = DocumentEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["documentId"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = CaseEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["caseId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
     indices = [Index("dueAt"), Index("documentId"), Index("caseId")]
 )
 data class ReminderEntity(
