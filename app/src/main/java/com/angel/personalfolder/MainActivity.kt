@@ -14,6 +14,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.angel.personalfolder.security.FileCrypto
 import com.angel.personalfolder.ui.FolderApp
 import com.angel.personalfolder.ui.FolderViewModel
@@ -27,7 +30,8 @@ class MainActivity : FragmentActivity() {
     private val settings by lazy { getSharedPreferences("personal_folder_settings", MODE_PRIVATE) }
     private var cameraFile: File? = null
     private var cameraUri: Uri? = null
-    private var sessionUnlocked = false
+    private var sessionUnlocked by mutableStateOf(false)
+    private var lockEnabled by mutableStateOf(false)
     private var lockPromptVisible = false
     private var pendingBackupPassword: String? = null
     private var pendingExportDocumentIds: List<String> = emptyList()
@@ -84,6 +88,7 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         File(cacheDir, "share").deleteRecursively()
         File(cacheDir, "camera").deleteRecursively()
+        lockEnabled = settings.getBoolean(KEY_LOCK, false)
         if (savedInstanceState == null) handleIncomingIntent(intent)
         setContent {
             PersonalFolderTheme {
@@ -93,14 +98,15 @@ class MainActivity : FragmentActivity() {
                     onCamera = ::takePhoto,
                     onOpenDocument = ::openDocument,
                     onShareDocument = ::shareDocument,
-                    onEnableLock = { authenticate { settings.edit().putBoolean(KEY_LOCK, true).apply() } },
-                    onDisableLock = { authenticate { settings.edit().putBoolean(KEY_LOCK, false).apply() } },
+                    onEnableLock = { authenticate { settings.edit().putBoolean(KEY_LOCK, true).apply(); lockEnabled = true; sessionUnlocked = true } },
+                    onDisableLock = { authenticate { settings.edit().putBoolean(KEY_LOCK, false).apply(); lockEnabled = false; sessionUnlocked = true } },
                     onCreateBackup = { password -> pendingBackupPassword = password; backupCreator.launch("personal-folder-backup.pfb") },
                     onRestoreBackup = { password -> pendingBackupPassword = password; backupPicker.launch(arrayOf("application/octet-stream", "application/zip", "*/*")) },
                     onRequestNotifications = ::requestNotificationPermission,
                     onExportDocuments = { documentIds -> pendingExportDocumentIds = documentIds; exportCreator.launch("personal-folder-export.zip") },
                     onExportPdf = { documentIds -> pendingPdfDocumentIds = documentIds; pdfExportCreator.launch("personal-folder-export.pdf") },
-                    lockEnabled = settings.getBoolean(KEY_LOCK, false)
+                    lockEnabled = lockEnabled,
+                    locked = lockEnabled && !sessionUnlocked
                 )
             }
         }
@@ -108,7 +114,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (settings.getBoolean(KEY_LOCK, false) && !sessionUnlocked && !lockPromptVisible) authenticate { sessionUnlocked = true }
+        if (lockEnabled && !sessionUnlocked && !lockPromptVisible) authenticate { sessionUnlocked = true }
     }
 
     override fun onStop() {

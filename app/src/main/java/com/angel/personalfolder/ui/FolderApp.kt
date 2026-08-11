@@ -111,7 +111,8 @@ fun FolderApp(
     onRequestNotifications: () -> Unit,
     onExportDocuments: (List<String>) -> Unit,
     onExportPdf: (List<String>) -> Unit,
-    lockEnabled: Boolean
+    lockEnabled: Boolean,
+    locked: Boolean
 ) {
     val documents by viewModel.documents.collectAsStateWithLifecycle()
     val cases by viewModel.cases.collectAsStateWithLifecycle()
@@ -127,6 +128,11 @@ fun FolderApp(
 
     LaunchedEffect(Unit) {
         viewModel.messages.collect { snackbar.showSnackbar(it) }
+    }
+
+    if (locked) {
+        LockedScreen()
+        return
     }
 
     val detail = selectedDocumentId != null || selectedCaseId != null
@@ -471,6 +477,18 @@ private fun StatusChip(state: String) { val label = when (state) { ProcessingSta
 
 @Composable
 private fun EmptyState(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector) { Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(30.dp)) { Icon(icon, null, modifier = Modifier.size(42.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = .65f)); Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+
+@Composable
+private fun LockedScreen() {
+    Surface(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Icon(Icons.Default.Lock, null, modifier = Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(16.dp))
+            Text("Ο φάκελος είναι κλειδωμένος", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("Επιβεβαίωσε την ταυτότητά σου για να συνεχίσεις.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+        }
+    }
+}
 
 @Composable
 private fun ReminderCard(reminder: ReminderEntity, onDone: () -> Unit) {

@@ -90,8 +90,17 @@ class BackupService(private val context: Context) {
         val entries = mutableMapOf<String, ByteArray>()
         ZipInputStream(FileInputStream(zip)).use { input ->
             var entry = input.nextEntry
+            var entryCount = 0
+            var totalBytes = 0L
             while (entry != null) {
-                if (!entry.isDirectory) entries[entry.name] = input.readBytes()
+                require(++entryCount <= MAX_BACKUP_ENTRIES) { "Το αντίγραφο περιέχει υπερβολικά πολλά αρχεία." }
+                require(entry.name.length <= MAX_ENTRY_NAME && !entry.name.contains("..") && !entry.name.contains('\\')) { "Μη έγκυρο όνομα αρχείου στο αντίγραφο." }
+                if (!entry.isDirectory) {
+                    val bytes = input.readBytes()
+                    totalBytes += bytes.size
+                    require(totalBytes <= MAX_BACKUP_BYTES) { "Το αντίγραφο είναι υπερβολικά μεγάλο." }
+                    entries[entry.name] = bytes
+                }
                 input.closeEntry()
                 entry = input.nextEntry
             }
@@ -186,5 +195,11 @@ class BackupService(private val context: Context) {
     private fun requireSafeId(value: String): String {
         require(value.matches(Regex("[A-Za-z0-9_-]{1,100}"))) { "Μη έγκυρο αναγνωριστικό στο αντίγραφο." }
         return value
+    }
+
+    private companion object {
+        const val MAX_BACKUP_BYTES = 512L * 1024 * 1024
+        const val MAX_BACKUP_ENTRIES = 10_000
+        const val MAX_ENTRY_NAME = 300
     }
 }
