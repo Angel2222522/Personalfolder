@@ -276,7 +276,7 @@ private fun DocumentsScreen(
     onImport: () -> Unit,
     onExportDocuments: (List<String>) -> Unit
 ) {
-    var selectedIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    var selectedIds by remember { mutableStateOf(emptySet<String>()) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         OutlinedTextField(value = query, onValueChange = onQuery, modifier = Modifier.fillMaxWidth().padding(top = 12.dp), placeholder = { Text("Αναζήτηση σε τίτλους, OCR και στοιχεία") }, leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true, trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { onQuery("") }) { Text("Καθαρισμός") } })
         if (selectedIds.isNotEmpty()) {
