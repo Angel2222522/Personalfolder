@@ -185,8 +185,8 @@ class ExportService(private val context: Context) {
             finished = true
             val xref = out.count
             writeAscii("xref\n0 ${objectCount + 1}\n0000000000 65535 f \n")
-            for (object in 1..objectCount) {
-                writeAscii(String.format(Locale.ROOT, "%010d 00000 n \n", offsets[object]))
+            for (objectNumber in 1..objectCount) {
+                writeAscii(String.format(Locale.ROOT, "%010d 00000 n \n", offsets[objectNumber]))
             }
             writeAscii("trailer\n<< /Size ${objectCount + 1} /Root 1 0 R >>\nstartxref\n$xref\n%%EOF\n")
         }

@@ -10,6 +10,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 @Database(
     entities = [
         DocumentEntity::class,
+        DocumentFtsEntity::class,
         DocumentPageEntity::class,
         CaseEntity::class,
         CaseDocumentCrossRef::class,

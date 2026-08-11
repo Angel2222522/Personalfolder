@@ -1,6 +1,7 @@
 package com.angel.personalfolder.data
 
 import androidx.room.Entity
+import androidx.room.Fts4
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.ColumnInfo
@@ -29,6 +30,24 @@ data class DocumentEntity(
     @ColumnInfo(defaultValue = "0") val metadataManuallyEdited: Boolean = false,
     val createdAt: Long,
     val updatedAt: Long
+)
+
+/**
+ * Room's schema model for the local full-text index. The row is maintained by
+ * the database triggers in [AppDatabase] so writes remain atomic with the
+ * document row while Room can validate and migrate FTS queries safely.
+ */
+@Fts4
+@Entity(tableName = "documents_fts")
+data class DocumentFtsEntity(
+    val documentId: String,
+    val title: String,
+    val originalFileName: String,
+    val ocrText: String,
+    val provider: String,
+    val category: String,
+    val tags: String,
+    val protocolNumber: String?
 )
 
 @Entity(
