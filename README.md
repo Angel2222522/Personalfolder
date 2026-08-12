@@ -2,6 +2,19 @@
 
 Offline-first Android εφαρμογή για ιδιωτική οργάνωση εγγράφων, υποθέσεων και προθεσμιών. Η έκδοση 2.0.0 κρατά το ίδιο `applicationId` (`com.angel.personalfolder`) και αυξάνει το `versionCode` από 1 σε 2.
 
+## Απαράβατη πολιτική μελλοντικών APK
+
+Κάθε νέο κανονικό APK πρέπει να αποτελεί **ενημέρωση της ίδιας εγκατεστημένης εφαρμογής** και να διατηρεί τα υπάρχοντα δεδομένα. Αυτό είναι release-blocking απαίτηση.
+
+- ίδιο release `applicationId`: `com.angel.personalfolder`,
+- μεγαλύτερο `versionCode` σε κάθε έκδοση,
+- **ίδια υπογραφή/signing certificate με την προηγούμενη εγκατεστημένη έκδοση**,
+- καμία destructive migration ή uninstall/reinstall ως λύση αναβάθμισης,
+- πλήρης διατήρηση συμβατότητας με υπάρχουσα βάση, κρυπτογραφημένα έγγραφα, OCR, metadata, υποθέσεις, σχέσεις, checklist, timeline, reminders και backups,
+- αν το σωστό signing key δεν είναι διαθέσιμο, δεν επιτρέπεται να παρουσιαστεί νέο APK ως συμβατή ενημέρωση.
+
+Το ιδιωτικό signing key δεν πρέπει να αποθηκεύεται στο δημόσιο repository. Η πλήρης πολιτική βρίσκεται στο [`docs/RELEASE_CONTINUITY.md`](docs/RELEASE_CONTINUITY.md) και οι ίδιοι κανόνες έχουν καταγραφεί στο [`AGENTS.md`](AGENTS.md) για κάθε μελλοντική εργασία πάνω στον κώδικα.
+
 ## Πραγματικές δυνατότητες
 
 - Εισαγωγή PDF, εικόνων, πολλών εικόνων και Android share intents ως ένα λογικό document.
@@ -44,6 +57,7 @@ gradle assembleRelease
 
 ## Τεκμηρίωση
 
+- [Release continuity](docs/RELEASE_CONTINUITY.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Feature inventory](docs/FEATURE_INVENTORY.md)
 - [Security and privacy](docs/SECURITY_PRIVACY.md)
