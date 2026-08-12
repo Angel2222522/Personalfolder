@@ -5,6 +5,26 @@ plugins {
     id("org.jetbrains.kotlin.kapt")
 }
 
+val releaseKeystorePath = System.getenv("PERSONAL_FOLDER_KEYSTORE_PATH")
+val releaseKeystorePassword = System.getenv("PERSONAL_FOLDER_KEYSTORE_PASSWORD")
+val releaseKeyAlias = System.getenv("PERSONAL_FOLDER_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("PERSONAL_FOLDER_KEY_PASSWORD")
+val releaseSigningInputs = listOf(
+    releaseKeystorePath,
+    releaseKeystorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword
+)
+val hasAnyReleaseSigningInput = releaseSigningInputs.any { !it.isNullOrBlank() }
+val hasAllReleaseSigningInputs = releaseSigningInputs.all { !it.isNullOrBlank() }
+
+if (hasAnyReleaseSigningInput && !hasAllReleaseSigningInputs) {
+    throw GradleException(
+        "Incomplete Personal Folder release signing configuration. " +
+            "Provide all PERSONAL_FOLDER_* signing environment variables or none."
+    )
+}
+
 android {
     namespace = "com.angel.personalfolder"
     compileSdk = 36
@@ -26,8 +46,22 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasAllReleaseSigningInputs) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseKeystorePassword!!
+                keyAlias = releaseKeyAlias!!
+                keyPassword = releaseKeyPassword!!
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (hasAllReleaseSigningInputs) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
