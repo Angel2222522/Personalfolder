@@ -47,7 +47,7 @@ class AppDatabaseMigrationTest {
             assertEquals("low", database.documentDao().getById("doc-1")?.expiryDateSuggestionConfidence)
             assertEquals(1, database.reminderDao().getAll().size)
             assertEquals(4102444800000L, database.reminderDao().getAll().single().deadlineAt)
-            database.openHelper.readableDatabase.rawQuery("PRAGMA index_list(checklist_items)", emptyArray()).use { cursor ->
+            database.openHelper.readableDatabase.query("PRAGMA index_list(checklist_items)").use { cursor ->
                 var found = false
                 while (cursor.moveToNext()) if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == "index_checklist_items_linkedDocumentId") found = true
                 assertEquals(true, found)
