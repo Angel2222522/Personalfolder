@@ -7,6 +7,7 @@ import android.app.Notification
 import android.os.Build
 import com.angel.personalfolder.data.AppDatabase
 import com.angel.personalfolder.data.BackupService
+import com.angel.personalfolder.data.DataOperationCoordinator
 import com.angel.personalfolder.data.DocumentDeletionRecovery
 import com.angel.personalfolder.data.ReminderScheduler
 import com.angel.personalfolder.security.TempFileCleaner
@@ -20,16 +21,21 @@ class PersonalFolderApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        DataOperationCoordinator.beginStartupRecovery()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                BackupService(this@PersonalFolderApp).recoverInterruptedRestore()
-            } catch (error: Throwable) {
-                android.util.Log.w("PersonalFolder", "Restore recovery was not completed: ${error::class.java.simpleName}")
-            }
-            try {
-                DocumentDeletionRecovery.recover(this@PersonalFolderApp, database)
-            } catch (error: Throwable) {
-                android.util.Log.w("PersonalFolder", "Document deletion recovery was not completed: ${error::class.java.simpleName}")
+                try {
+                    BackupService(this@PersonalFolderApp).recoverInterruptedRestore()
+                } catch (error: Throwable) {
+                    android.util.Log.w("PersonalFolder", "Restore recovery was not completed: ${error::class.java.simpleName}")
+                }
+                try {
+                    DocumentDeletionRecovery.recover(this@PersonalFolderApp, database)
+                } catch (error: Throwable) {
+                    android.util.Log.w("PersonalFolder", "Document deletion recovery was not completed: ${error::class.java.simpleName}")
+                }
+            } finally {
+                DataOperationCoordinator.completeStartupRecovery()
             }
             TempFileCleaner.recover(this@PersonalFolderApp)
             ReminderScheduler.rescheduleAll(this@PersonalFolderApp)

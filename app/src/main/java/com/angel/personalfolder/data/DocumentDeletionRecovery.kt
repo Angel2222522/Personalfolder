@@ -35,7 +35,7 @@ object DocumentDeletionRecovery {
     }
 
     suspend fun recover(context: Context, database: AppDatabase) = withContext(Dispatchers.IO) {
-        DataOperationCoordinator.withExclusive {
+        DataOperationCoordinator.withExclusiveDuringStartup {
             val journalFile = context.filesDir.resolve(JOURNAL_FILE)
             if (!journalFile.isFile) return@withExclusive
             val journal = runCatching { JSONObject(journalFile.readText(Charsets.UTF_8)) }.getOrNull()
@@ -73,4 +73,3 @@ object DocumentDeletionRecovery {
         return if (candidate == expected || candidate.toPath().startsWith(expected.toPath())) candidate else null
     }
 }
-

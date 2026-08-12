@@ -29,7 +29,7 @@ class BackupService(private val context: Context) {
 
     /** Repairs a restore interrupted between the filesystem swap and the Room transaction. */
     suspend fun recoverInterruptedRestore() = withContext(Dispatchers.IO) {
-        DataOperationCoordinator.withExclusive {
+        DataOperationCoordinator.withExclusiveDuringStartup {
             val journalFile = context.filesDir.resolve(RESTORE_JOURNAL)
             if (!journalFile.isFile) return@withExclusive
             val journal = runCatching { JSONObject(journalFile.readText(Charsets.UTF_8)) }.getOrNull()
