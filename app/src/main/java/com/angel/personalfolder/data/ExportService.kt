@@ -24,6 +24,7 @@ class ExportService(private val context: Context) {
     private val renderService = DocumentRenderService(context)
 
     suspend fun exportDocuments(destination: Uri, documentIds: List<String>) = withContext(Dispatchers.IO) {
+        DataOperationCoordinator.withExclusive {
         val documents = selectedDocuments(documentIds)
         val selectedIds = documents.map(DocumentEntity::id).toSet()
         val pages = database.documentPageDao().getAll()
@@ -74,9 +75,11 @@ class ExportService(private val context: Context) {
         } finally {
             temporary.delete()
         }
+        }
     }
 
     suspend fun exportPdf(destination: Uri, documentIds: List<String>) = withContext(Dispatchers.IO) {
+        DataOperationCoordinator.withExclusive {
         val documents = selectedDocuments(documentIds)
         val pdf = context.cacheDir.resolve("export/export_${UUID.randomUUID()}.pdf").apply { parentFile?.mkdirs() }
         try {
@@ -85,9 +88,11 @@ class ExportService(private val context: Context) {
         } finally {
             pdf.delete()
         }
+        }
     }
 
     suspend fun createSharePdf(documentId: String): File = withContext(Dispatchers.IO) {
+        DataOperationCoordinator.withExclusive {
         val document = database.documentDao().getById(documentId) ?: error("Το έγγραφο δεν βρέθηκε.")
         val output = context.cacheDir.resolve("share/${document.id}_${UUID.randomUUID()}.pdf").apply { parentFile?.mkdirs() }
         try {
@@ -96,6 +101,7 @@ class ExportService(private val context: Context) {
         } catch (error: Throwable) {
             output.delete()
             throw error
+        }
         }
     }
 
