@@ -1,8 +1,8 @@
 package com.angel.personalfolder.processing
 
 import com.angel.personalfolder.data.MetadataConfidence
-import java.text.SimpleDateFormat
 import java.text.Normalizer
+import java.text.SimpleDateFormat
 import java.util.Locale
 
 data class ExtractedMetadata(
@@ -42,13 +42,48 @@ object MetadataExtractor {
         CategoryRule("Μετανάστευση / άδειες", listOf("άδεια διαμονής", "μετανάστευση", "migration", "residence permit", "visa", "ασύλου")),
         CategoryRule("Κατοικία", listOf("μισθωτήριο", "μίσθωση", "ενοίκιο", "κατοικία", "μισθωτής", "διεύθυνση κατοικίας")),
         CategoryRule("Δημόσιες υπηρεσίες", listOf("gov.gr", "ααδε", "εφκα", "δήμος", "δημόσια υπηρεσία", "δημόσιο", "αίτηση", "βεβαίωση")),
-        // «Σύμβαση» alone belongs to contracts; the more specific phrase
-        // «σύμβαση εργασίας» wins for employment documents.
         CategoryRule("Εργασία", listOf("σύμβαση εργασίας", "εργασία", "εργοδότης", "μισθός", "ένσημα", "employment")),
         CategoryRule("Οικονομικά", listOf("τράπεζα", "φορολογία", "παράβολο", "πληρωμή", "iban", "φορολογική δήλωση")),
         CategoryRule("Λογαριασμοί", listOf("λογαριασμός", "δεη", "ρεύμα", "ύδρευση", "φυσικό αέριο", "τηλεφωνία", "internet bill")),
         CategoryRule("Υγεία", listOf("ιατρός", "νοσοκομείο", "διάγνωση", "συνταγή", "υγεία", "health")),
         CategoryRule("Συμβόλαια", listOf("σύμβαση", "όροι", "συμφωνητικό", "contract", "μίσθωση"))
+    )
+
+    private val strongIssuedKeywords = listOf(
+        "ημερομηνία δημιουργίας",
+        "ημ δημιουργίας",
+        "ημερομηνία έκδοσης",
+        "ημ έκδοσης",
+        "creation date",
+        "created on",
+        "issue date",
+        "issued on"
+    )
+    private val issuedKeywords = listOf(
+        "δημιουργία",
+        "δημιουργήθηκε",
+        "έκδοση",
+        "εκδόθηκε",
+        "created",
+        "creation",
+        "issued"
+    )
+    private val strongExpiryKeywords = listOf(
+        "ημερομηνία λήξης",
+        "ημ λήξης",
+        "ισχύει έως",
+        "ισχύς έως",
+        "ισχύει μέχρι",
+        "valid until",
+        "valid through",
+        "expiry date"
+    )
+    private val expiryKeywords = listOf(
+        "λήξη",
+        "λήγει",
+        "expires",
+        "expiry",
+        "expiration"
     )
 
     fun extract(text: String, fallbackTitle: String): ExtractedMetadata {
@@ -86,45 +121,45 @@ object MetadataExtractor {
 
         val dateMatches = dateRegex.findAll(normalized).mapNotNull { match ->
             normalizeDate(match.value)?.let { canonical ->
-                DateMatch(canonical, match.range, contextForDate(normalized, match.range))
+                DateMatch(
+                    canonical = canonical,
+                    range = match.range,
+                    labelContext = labelContextBeforeDate(normalized, match.range)
+                )
             }
         }.toList()
-        val issuedCandidate = dateMatches
-            .map { it to issuedScore(it.context) }
-            .filter { it.second > 0 }
-            .maxWithOrNull(compareBy<Pair<DateMatch, Int>> { it.second }.thenBy { -it.first.range.first })
-        val expiryCandidate = dateMatches
-            .filter { it.range != issuedCandidate?.first?.range }
-            .map { it to expiryScore(it.context) }
-            .filter { it.second >= STRONG_EXPIRY_SCORE }
-            .maxWithOrNull(compareBy<Pair<DateMatch, Int>> { it.second }.thenBy { it.first.range.first })
+        val dateCandidates = dateMatches.map { match ->
+            DateCandidate(
+                match = match,
+                issuedScore = keywordScore(match.labelContext, strongIssuedKeywords, issuedKeywords),
+                expiryScore = keywordScore(match.labelContext, strongExpiryKeywords, expiryKeywords)
+            )
+        }
 
-        // Expiry is a deadline, not a generic date guess. Never invent it from
-        // the last date in the document and never reuse the same OCR occurrence
-        // that was already identified as the issue/creation date.
-        val expiry = expiryCandidate?.first?.canonical
-        val expiryConfidence = when {
-            expiryCandidate != null && expiryCandidate.second >= STRONG_EXPIRY_SCORE -> MetadataConfidence.HIGH
-            else -> MetadataConfidence.NONE
-        }
-        val expiryProvenance = if (expiryCandidate != null) {
-            "expiry-label:${expiryCandidate.second}"
-        } else {
-            "none"
-        }
-        val issued = issuedCandidate?.first?.canonical
-            ?: dateMatches.firstOrNull { it.range != expiryCandidate?.first?.range }?.canonical
+        val issuedCandidate = dateCandidates
+            .filter { it.issuedScore > 0 }
+            .maxWithOrNull(compareBy<DateCandidate> { it.issuedScore }.thenBy { -it.match.range.first })
+        val expiryCandidate = dateCandidates
+            .filter { it.expiryScore > 0 }
+            .maxWithOrNull(compareBy<DateCandidate> { it.expiryScore }.thenBy { it.match.range.first })
+
+        // Dates are metadata only when a matching label/keyword belongs to that
+        // concrete OCR date. Other words in the same line never cancel a valid
+        // creation/issue or expiry label, and unlabelled dates are not guessed.
+        val issued = issuedCandidate?.match?.canonical
+        val expiry = expiryCandidate?.match?.canonical
         val issuedConfidence = when {
-            issuedCandidate != null && issuedCandidate.second >= 4 -> MetadataConfidence.HIGH
-            issuedCandidate != null -> MetadataConfidence.MEDIUM
-            issued != null -> MetadataConfidence.LOW
-            else -> MetadataConfidence.NONE
+            issuedCandidate == null -> MetadataConfidence.NONE
+            issuedCandidate.issuedScore >= STRONG_KEYWORD_SCORE -> MetadataConfidence.HIGH
+            else -> MetadataConfidence.MEDIUM
         }
-        val issuedProvenance = when {
-            issuedCandidate != null -> "issued-label:${issuedCandidate.second}"
-            issued != null -> "fallback:first-other-date"
-            else -> "none"
+        val expiryConfidence = when {
+            expiryCandidate == null -> MetadataConfidence.NONE
+            expiryCandidate.expiryScore >= STRONG_KEYWORD_SCORE -> MetadataConfidence.HIGH
+            else -> MetadataConfidence.MEDIUM
         }
+        val issuedProvenance = issuedCandidate?.let { "issued-keyword:${it.issuedScore}" } ?: "none"
+        val expiryProvenance = expiryCandidate?.let { "expiry-keyword:${it.expiryScore}" } ?: "none"
 
         val protocolMatch = protocolRegex.find(folded)
         val protocol = protocolMatch?.groupValues?.getOrNull(1)?.trim()?.takeIf(::isValidProtocol)
@@ -190,24 +225,40 @@ object MetadataExtractor {
         return score.takeIf { it > 0 }
     }
 
-    private fun expiryScore(context: String): Int {
+    private fun keywordScore(context: String, strongKeywords: List<String>, regularKeywords: List<String>): Int {
         val value = foldGreek(context)
         return when {
-            listOf("ημερομηνια ληξης", "ημ ληξης", "expiry", "expires", "expiration").any(value::contains) -> 4
-            listOf("ισχυει εως", "ισχυς εως", "valid until", "valid through").any(value::contains) -> 4
-            listOf("ληξη", "ληγει").any(value::contains) -> 4
-            listOf("ληξ", "εως", "μεχρι", "ισχυει", "valid").any(value::contains) -> 3
+            strongKeywords.any { value.contains(foldGreek(it)) } -> STRONG_KEYWORD_SCORE
+            regularKeywords.any { value.contains(foldGreek(it)) } -> REGULAR_KEYWORD_SCORE
             else -> 0
         }
     }
 
-    private fun issuedScore(context: String): Int {
-        val value = foldGreek(context)
-        return when {
-            listOf("ημερομηνια εκδοσης", "ημ εκδοσης", "issued", "issue date").any(value::contains) -> 4
-            listOf("ημερομηνια δημιουργιας", "creation date", "created on").any(value::contains) -> 4
-            listOf("εκδοθ", "εκδοση", "αποφαση", "dated").any(value::contains) -> 3
-            else -> 0
+    /**
+     * A label belongs to the date that follows it. For multiple dates on one
+     * OCR line, only the text since the previous date is considered, so
+     * "Δημιουργία: 01/01/2024 | Λήξη: 01/01/2025" maps each label correctly.
+     * If the date starts its line, a label-only previous line is also accepted.
+     */
+    private fun labelContextBeforeDate(text: String, range: IntRange): String {
+        val lineStart = text.lastIndexOf('\n', (range.first - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
+        val linePrefix = text.substring(lineStart, range.first)
+        val previousDate = dateRegex.findAll(linePrefix).lastOrNull()
+        val localPrefix = if (previousDate == null) {
+            linePrefix
+        } else {
+            linePrefix.substring(previousDate.range.last + 1)
+        }
+        if (localPrefix.any(Char::isLetterOrDigit)) return localPrefix.takeLast(LABEL_CONTEXT_LIMIT)
+        if (lineStart == 0) return localPrefix.takeLast(LABEL_CONTEXT_LIMIT)
+
+        val previousLineEnd = (lineStart - 1).coerceAtLeast(0)
+        val previousLineStart = text.lastIndexOf('\n', (previousLineEnd - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
+        val previousLine = text.substring(previousLineStart, previousLineEnd)
+        return if (dateRegex.containsMatchIn(previousLine)) {
+            localPrefix.takeLast(LABEL_CONTEXT_LIMIT)
+        } else {
+            (previousLine + " " + localPrefix).takeLast(LABEL_CONTEXT_LIMIT)
         }
     }
 
@@ -216,24 +267,6 @@ object MetadataExtractor {
         return clean.length >= 3 && clean.any(Char::isDigit) && clean.all {
             it.isLetterOrDigit() || it == '.' || it == '/' || it == '_' || it == '-'
         }
-    }
-
-    /**
-     * Date labels are local. Looking dozens of characters after a date allowed
-     * a later sentence such as "ισχύει ..." to incorrectly relabel the earlier
-     * issue date as an expiry. Use the current line, plus the previous line only
-     * when the date starts a line and the OCR may have split label from value.
-     */
-    private fun contextForDate(text: String, range: IntRange): String {
-        val lineStart = text.lastIndexOf('\n', (range.first - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
-        val lineEnd = text.indexOf('\n', range.last + 1).let { if (it < 0) text.length else it }
-        val currentLine = text.substring(lineStart, lineEnd)
-        val offsetInLine = (range.first - lineStart).coerceIn(0, currentLine.length)
-        if (currentLine.substring(0, offsetInLine).isNotBlank() || lineStart == 0) return currentLine
-
-        val previousLineEnd = (lineStart - 1).coerceAtLeast(0)
-        val previousLineStart = text.lastIndexOf('\n', (previousLineEnd - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
-        return text.substring(previousLineStart, lineEnd)
     }
 
     private fun jsonValue(value: String?): String = value?.let { "\"${jsonEscape(it)}\"" } ?: "null"
@@ -271,7 +304,10 @@ object MetadataExtractor {
     private data class CategoryRule(val name: String, val terms: List<String>)
     private data class CategoryCandidate(val name: String, val score: Int, val longestTerm: Int)
     private data class ProviderCandidate(val value: String, val score: Int, val index: Int)
-    private data class DateMatch(val canonical: String, val range: IntRange, val context: String)
+    private data class DateMatch(val canonical: String, val range: IntRange, val labelContext: String)
+    private data class DateCandidate(val match: DateMatch, val issuedScore: Int, val expiryScore: Int)
 
-    private const val STRONG_EXPIRY_SCORE = 4
+    private const val STRONG_KEYWORD_SCORE = 5
+    private const val REGULAR_KEYWORD_SCORE = 4
+    private const val LABEL_CONTEXT_LIMIT = 120
 }
