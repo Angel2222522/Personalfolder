@@ -41,6 +41,11 @@ abstract class AppDatabase : RoomDatabase() {
 
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(database: SupportSQLiteDatabase) {
+                // V1/V2 did not enforce these relationships. Refuse the
+                // migration before touching any table if an old installation
+                // contains orphan rows; filtering them with WHERE EXISTS
+                // would silently destroy user data.
+                requireNoLegacyOrphans(database)
                 database.execSQL("ALTER TABLE documents ADD COLUMN metadataManuallyEdited INTEGER NOT NULL DEFAULT 0")
                 database.execSQL("""
                     CREATE TABLE IF NOT EXISTS documents_new (
@@ -332,6 +337,23 @@ abstract class AppDatabase : RoomDatabase() {
                     statement.clearBindings()
                     values.forEachIndexed { index, value -> if (value == null) statement.bindNull(index + 1) else statement.bindString(index + 1, value as String) }
                     statement.executeInsert()
+                }
+            }
+        }
+
+        private fun requireNoLegacyOrphans(database: SupportSQLiteDatabase) {
+            val checks = listOf(
+                "SELECT COUNT(*) FROM document_pages p LEFT JOIN documents d ON d.id = p.documentId WHERE d.id IS NULL" to "document pages",
+                "SELECT COUNT(*) FROM case_documents r LEFT JOIN cases c ON c.id = r.caseId LEFT JOIN documents d ON d.id = r.documentId WHERE c.id IS NULL OR d.id IS NULL" to "case-document relations",
+                "SELECT COUNT(*) FROM timeline_events e LEFT JOIN cases c ON c.id = e.caseId WHERE c.id IS NULL" to "timeline events",
+                "SELECT COUNT(*) FROM checklist_items i LEFT JOIN cases c ON c.id = i.caseId WHERE c.id IS NULL" to "checklist items"
+            )
+            checks.forEach { (query, label) ->
+                database.query(query).use { cursor ->
+                    val count = if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+                    require(count == 0L) {
+                        "Η αναβάθμιση σταμάτησε επειδή βρέθηκαν μη συνδεδεμένα $label. Τα αρχικά δεδομένα δεν διαγράφηκαν."
+                    }
                 }
             }
         }

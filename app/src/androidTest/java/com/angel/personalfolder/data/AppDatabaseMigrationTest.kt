@@ -10,6 +10,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -62,8 +63,37 @@ class AppDatabaseMigrationTest {
         }
     }
 
-    private fun createLegacyDatabase(version: Int) {
-        val file: File = context.getDatabasePath(databaseName)
+    @Test
+    fun refusesOrphanRowsBeforeDestructiveMigrationAndLeavesLegacyDataIntact() {
+        val orphanDatabaseName = "migration_orphan_${System.nanoTime()}.db"
+        createLegacyDatabase(orphanDatabaseName, withOrphanPage = true)
+        var migrationFailed = false
+        val database = Room.databaseBuilder(context, AppDatabase::class.java, orphanDatabaseName)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
+            .build()
+        try {
+            database.openHelper.writableDatabase
+        } catch (_: Throwable) {
+            migrationFailed = true
+        } finally {
+            database.close()
+        }
+        assertTrue("The migration must fail closed instead of dropping orphan rows", migrationFailed)
+
+        SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(orphanDatabaseName), null).use { legacy ->
+            legacy.query("document_pages", arrayOf("documentId"), "documentId = ?", arrayOf("orphan-doc"), null, null, null).use { cursor ->
+                assertEquals(1, cursor.count)
+            }
+            legacy.rawQuery("PRAGMA user_version", null).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(1, cursor.getInt(0))
+            }
+        }
+        context.deleteDatabase(orphanDatabaseName)
+    }
+
+    private fun createLegacyDatabase(name: String = databaseName, withOrphanPage: Boolean = false, version: Int = 1) {
+        val file: File = context.getDatabasePath(name)
         file.parentFile?.mkdirs()
         SQLiteDatabase.openOrCreateDatabase(file, null).use { database ->
             database.execSQL("CREATE TABLE documents (id TEXT NOT NULL, title TEXT NOT NULL, originalFileName TEXT NOT NULL, mimeType TEXT NOT NULL, encryptedPath TEXT NOT NULL, pageCount INTEGER NOT NULL, category TEXT NOT NULL, tags TEXT NOT NULL, provider TEXT NOT NULL, issuedDate TEXT, expiryDate TEXT, protocolNumber TEXT, ocrText TEXT NOT NULL, extractedMetadataJson TEXT NOT NULL, processingState TEXT NOT NULL, processingError TEXT, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, PRIMARY KEY(id))")
@@ -89,6 +119,9 @@ class AppDatabaseMigrationTest {
             database.execSQL("CREATE INDEX index_reminders_caseId ON reminders(caseId)")
             database.execSQL("INSERT INTO documents (id,title,originalFileName,mimeType,encryptedPath,pageCount,category,tags,provider,issuedDate,expiryDate,protocolNumber,ocrText,extractedMetadataJson,processingState,processingError,createdAt,updatedAt) VALUES ('doc-1','Έγγραφο','doc.pdf','application/pdf','/data/data/app/files/documents/doc-1/page_0.pf',1,'Άλλα','','',NULL,'2026-12-31',NULL,'κείμενο','{}','processed',NULL,1,2)")
             database.execSQL("INSERT INTO document_pages VALUES ('doc-1',0,'/data/data/app/files/documents/doc-1/page_0.pf','κείμενο')")
+            if (withOrphanPage) {
+                database.execSQL("INSERT INTO document_pages VALUES ('orphan-doc',0,'/data/data/app/files/documents/orphan-doc/page_0.pf','ορφανό')")
+            }
             database.execSQL("INSERT INTO cases VALUES ('case-1','Υπόθεση','περιγραφή','Νέα','2026-01-01','2026-12-31','Επόμενο','σημείωση',1,2)")
             database.execSQL("INSERT INTO case_documents VALUES ('case-1','doc-1')")
             database.execSQL("INSERT INTO timeline_events VALUES ('event-1','case-1','Γεγονός','','manual','2026-01-02',2)")
