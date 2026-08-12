@@ -180,6 +180,13 @@ class BackupService(private val context: Context) {
         val stagingRoot = context.cacheDir.resolve("restore_documents_${UUID.randomUUID()}").apply { mkdirs() }
         val root = context.filesDir.resolve("documents")
         val previousRoot = context.cacheDir.resolve("previous_documents_${UUID.randomUUID()}")
+        val currentDocumentIds = database.documentDao().getAll().map { it.id }.toSet()
+        // A missing live root is safe to replace only for an empty current
+        // database. If Room still contains documents, replacing the missing
+        // tree would create an unrecoverable mixed generation.
+        require(root.isDirectory || currentDocumentIds.isEmpty()) {
+            "Δεν υπάρχει ασφαλής προηγούμενη γενιά εγγράφων για επαναφορά."
+        }
         val stagedFiles = mutableMapOf<String, File>()
         var previousMoved = false
         var filesInstalled = false
@@ -231,10 +238,16 @@ class BackupService(private val context: Context) {
             )
 
             previousMoved = if (root.exists()) {
+                require(root.isDirectory) { "Ο χώρος εγγράφων δεν είναι έγκυρος κατάλογος." }
                 require(root.renameTo(previousRoot)) { "Δεν ήταν δυνατή η προετοιμασία της επαναφοράς." }
                 true
             } else {
-                false
+                // Materialise an empty previous generation. This gives an
+                // empty/new installation a safe rollback target if the
+                // process dies after the staged tree is installed but before
+                // the Room transaction commits.
+                require(previousRoot.mkdirs()) { "Δεν ήταν δυνατή η δημιουργία ασφαλούς προηγούμενης γενιάς." }
+                true
             }
             require(!root.exists()) { "Δεν ήταν δυνατή η προετοιμασία της επαναφοράς." }
             require(stagingRoot.renameTo(root)) { "Δεν ήταν δυνατή η εγκατάσταση των αρχείων επαναφοράς." }
