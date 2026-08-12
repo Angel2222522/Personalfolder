@@ -1,38 +1,32 @@
 # V2 testing report
 
-## What was actually executed
+## Checks that were executed
 
-- Host Tesseract was run against the exact bundled `ell+eng` assets. Both assets passed `combine_tessdata -d` and SHA-256/size checks.
-- Controlled fixtures were OCR'd: Greek image, Greek/English image, low-quality image, and a two-page PDF rendered to bounded 2400-pixel pages.
+- Host Tesseract was run against the exact bundled `ell+eng` assets. Both assets passed `combine_tessdata -d` and the pinned SHA-256/size checks.
+- Controlled fixtures were OCR'd: Greek image, Greek/English image, low-quality image and a two-page PDF rendered to bounded pages.
+- The attached example PDF was used only in the local workspace. Its host OCR contained the specific ministry, protocol label/number and registry label/number, while no explicit expiry marker was found. The PDF and OCR output were not added to Git or GitHub.
 - The SQLite FTS trigger/normalization rule was exercised with uppercase Greek, tonos and accentless prefix queries.
 - `git diff --check` completed without whitespace errors.
-- The new metadata unit tests cover explicit expiry labels, unrelated/rejection/decision dates, composite date ranges, specific provider selection, protocol OCR variants, and conservative null behavior.
+- GitHub Actions run [31590944545](https://github.com/Angel2222522/Personalfolder/actions/runs/31590944545), commit `82b71cf7f1158dfffda5870ecdbd730188e0ce7f`, passed unit tests, lint, instrumentation-test compilation, debug APK assembly and release APK assembly.
 
-The host checks do not replace Android execution. The current checkout has no Gradle wrapper, system Gradle, Android SDK, `adb`, emulator or attached device, so the local Android build and instrumentation tests could not be run here.
+## Test coverage
 
-## Android tests added but not executed in this environment
+The CI JVM test task executed the metadata extractor/merge tests, including explicit expiry labels, unrelated/rejection/decision dates, composite date ranges, specific provider selection, protocol OCR variants, conservative null behavior and legacy/manual expiry handling. It also executed the existing pure JVM coverage.
 
-- `AppDatabaseMigrationTest`: V1→V5 relations, cascade/SET NULL behavior, the `linkedDocumentId` index and the new expiry-manual flag.
-- `OcrWorkerIntegrationTest`: encrypted Greek image, multi-page PDF rendering, persisted page/document OCR, normalized FTS search and unreadable-input failure state.
+The CI compiled, but did not execute, Android instrumentation tests:
+
+- `AppDatabaseMigrationTest`: V1→V5 schema and the new per-field expiry-manual flag.
+- `OcrWorkerIntegrationTest`: encrypted image/PDF OCR, page/document persistence, normalized FTS and failure state.
 - `MetadataPersistenceTest`: the safe expiry value is the value persisted in `DocumentEntity`.
-- `DocumentFileFormatTest` and `SearchTextTest`: pure JVM checks for PDF signature detection and Greek normalization.
-- `MetadataExtractorTest` and `MetadataMergeTest`: the new conservative metadata rules and legacy/manual expiry behavior.
-- Existing `BackupRoundTripTest`: portable backup, wrong password and corrupted archive behavior.
+- Existing backup, file-format, search and restore coverage.
 
-## External CI artifact audit
+## APK artifact audit
 
-The latest available remote debug artifact (GitHub Actions run `31524486919`, source commit `55cd08109ecb9898a1808308355030be291861b3`) was inspected before modifying this checkout. Its APK contained `ell.traineddata` and `eng.traineddata` at exactly 786,444 bytes; `combine_tessdata -d` could not read the model components. The APK therefore could install while its OCR initialization failed. That artifact is not a build of the uncommitted local fixes.
+- Release verification artifact: `app-release-unsigned.apk`.
+- Its `ell.traineddata` is 1,419,514 bytes with SHA-256 `4fba8a0b461038d51f1c20d043d4f2ac38c4e778f1b90830847f7bd8fa3ba726`.
+- Its `eng.traineddata` is 4,113,088 bytes with SHA-256 `7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2`.
+- The release artifact is unsigned because the repository does not contain the private release key. An install/update requires signing with the same key as the existing installation.
 
-The remote workflow compiled instrumentation sources but did not execute them. No physical installed APK was available for inspection, so the installed APK on a user's device cannot be identified from this checkout.
+## Checks intentionally not executed
 
-## Required final verification on an Android environment
-
-```bash
-./gradlew testDebugUnitTest
-./gradlew lintDebug
-./gradlew assembleDebug
-./gradlew assembleRelease
-./gradlew connectedDebugAndroidTest
-```
-
-Then install the newly produced debug APK and exercise clean Greek image, scanned Greek PDF, embedded-text PDF, mixed-language, multi-page, EXIF-rotated and low-quality inputs, including cold start, process stop, cancellation, retry and low-memory conditions. Record `adb logcat` and the final Room/Worker states for each case.
+No emulator, physical device, `adb` installation, camera test, biometric hardware test or end-to-end Android runtime test was performed. The workflow has no emulator step, as requested.

@@ -46,4 +46,4 @@
 - Tests: `AppDatabaseMigrationTest.kt`, `OcrWorkerIntegrationTest.kt`, `DocumentFileFormatTest.kt`, `SearchTextTest.kt`.
 - Documentation: `FEATURE_INVENTORY.md`, `ARCHITECTURE.md`, `TESTING_REPORT.md`.
 
-Δεν έγινε commit ή αποστολή αλλαγών σε απομακρυσμένο repository.
+Οι διορθώσεις OCR/metadata καταχωρίστηκαν στο GitHub στο PR #2. Το επιτυχές CI run 31590944545 επιβεβαίωσε unit tests, lint, compilation των instrumentation tests και τα debug/release APK builds. Δεν έγινε εκτέλεση emulator ή πραγματικής συσκευής και το προσωπικό PDF χρησιμοποιήθηκε μόνο τοπικά.
