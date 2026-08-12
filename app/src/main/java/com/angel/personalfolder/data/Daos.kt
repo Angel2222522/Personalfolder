@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -51,6 +52,9 @@ interface DocumentDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(documents: List<DocumentEntity>)
+
+    @Update
+    suspend fun update(document: DocumentEntity)
 
     @Query("""
         UPDATE documents SET title = :title, category = :category, tags = :tags,

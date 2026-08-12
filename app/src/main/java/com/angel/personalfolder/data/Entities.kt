@@ -28,6 +28,20 @@ data class DocumentEntity(
     val processingState: String = ProcessingState.QUEUED,
     val processingError: String? = null,
     @ColumnInfo(defaultValue = "0") val metadataManuallyEdited: Boolean = false,
+    val expiryDateSuggestion: String? = null,
+    @ColumnInfo(defaultValue = "'none'") val expiryDateSuggestionConfidence: String = MetadataConfidence.NONE,
+    @ColumnInfo(defaultValue = "'unknown'") val titleConfidence: String = MetadataConfidence.UNKNOWN,
+    @ColumnInfo(defaultValue = "'unknown'") val categoryConfidence: String = MetadataConfidence.UNKNOWN,
+    @ColumnInfo(defaultValue = "'unknown'") val providerConfidence: String = MetadataConfidence.UNKNOWN,
+    @ColumnInfo(defaultValue = "'unknown'") val issuedDateConfidence: String = MetadataConfidence.UNKNOWN,
+    @ColumnInfo(defaultValue = "'unknown'") val expiryDateConfidence: String = MetadataConfidence.UNKNOWN,
+    @ColumnInfo(defaultValue = "'unknown'") val protocolNumberConfidence: String = MetadataConfidence.UNKNOWN,
+    @ColumnInfo(defaultValue = "0") val titleManuallyEdited: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val categoryManuallyEdited: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val providerManuallyEdited: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val issuedDateManuallyEdited: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val expiryDateManuallyEdited: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val protocolNumberManuallyEdited: Boolean = false,
     val createdAt: Long,
     val updatedAt: Long
 )
@@ -184,8 +198,21 @@ data class ReminderEntity(
     val documentId: String? = null,
     val caseId: String? = null,
     val leadDays: Int = 0,
-    val isDone: Boolean = false
+    val isDone: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val deadlineAt: Long = dueAt
 )
+
+/** Confidence/provenance values persisted with automatically extracted metadata. */
+object MetadataConfidence {
+    const val NONE = "none"
+    const val LOW = "low"
+    const val MEDIUM = "medium"
+    const val HIGH = "high"
+    const val MANUAL = "manual"
+    const val UNKNOWN = "unknown"
+
+    fun isAuthoritative(value: String): Boolean = value == HIGH || value == MEDIUM || value == MANUAL
+}
 
 object ProcessingState {
     const val QUEUED = "queued"

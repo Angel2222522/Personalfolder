@@ -92,6 +92,7 @@ import com.angel.personalfolder.data.CaseEntity
 import com.angel.personalfolder.data.CaseStatus
 import com.angel.personalfolder.data.ChecklistItemEntity
 import com.angel.personalfolder.data.DocumentEntity
+import com.angel.personalfolder.data.MetadataConfidence
 import com.angel.personalfolder.data.ProcessingState
 import com.angel.personalfolder.data.ReminderEntity
 import java.time.LocalDate
@@ -126,6 +127,7 @@ fun FolderApp(
     locked: Boolean
 ) {
     val documents by viewModel.documents.collectAsStateWithLifecycle()
+    val allDocuments by viewModel.allDocuments.collectAsStateWithLifecycle()
     val cases by viewModel.cases.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
     val categoryFilter by viewModel.category.collectAsStateWithLifecycle()
@@ -187,14 +189,14 @@ fun FolderApp(
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
                 selectedDocumentId != null -> {
-                    val document = documents.firstOrNull { it.id == selectedDocumentId }
+                    val document = allDocuments.firstOrNull { it.id == selectedDocumentId }
                     if (document != null) DocumentDetailScreen(document, viewModel, onOpenDocument, onShareDocument, onBack = { selectedDocumentId = null })
                 }
                 selectedCaseId != null -> {
                     val caseEntity = cases.firstOrNull { it.id == selectedCaseId }
-                    if (caseEntity != null) CaseDetailScreen(caseEntity, documents, viewModel, onOpenDocument)
+                    if (caseEntity != null) CaseDetailScreen(caseEntity, allDocuments, viewModel, onOpenDocument)
                 }
-                section == MainSection.HOME.name -> HomeScreen(documents, cases, reminders, onImport, onCamera, { section = MainSection.DOCUMENTS.name }, { section = MainSection.CASES.name }, { selectedDocumentId = it }, { selectedCaseId = it }, viewModel::markReminderDone)
+                section == MainSection.HOME.name -> HomeScreen(allDocuments, cases, reminders, onImport, onCamera, { section = MainSection.DOCUMENTS.name }, { section = MainSection.CASES.name }, { selectedDocumentId = it }, { selectedCaseId = it }, viewModel::markReminderDone)
                 section == MainSection.DOCUMENTS.name -> DocumentsScreen(
                     documents = documents,
                     cases = cases,
@@ -340,6 +342,11 @@ private fun DocumentsScreen(
     onExportPdf: (List<String>) -> Unit
 ) {
     var selectedIds by remember { mutableStateOf(emptySet<String>()) }
+    LaunchedEffect(documents) {
+        val visibleIds = documents.asSequence().map { it.id }.toSet()
+        selectedIds = selectedIds.intersect(visibleIds)
+    }
+    val hasActiveFilter = query.isNotBlank() || category.isNotBlank() || processingState.isNotBlank() || caseId != null || expiringSoon
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         OutlinedTextField(value = query, onValueChange = onQuery, modifier = Modifier.fillMaxWidth().padding(top = 12.dp), placeholder = { Text("Αναζήτηση σε τίτλους, OCR και στοιχεία") }, leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true, trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { onQuery("") }) { Text("Καθαρισμός") } })
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -362,7 +369,7 @@ private fun DocumentsScreen(
         }
         if (busy) LinearProcessing()
         if (documents.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState(if (query.isBlank()) "Δεν έχεις προσθέσει ακόμη έγγραφα." else "Δεν βρέθηκαν αποτελέσματα.", Icons.Default.Search) }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState(if (hasActiveFilter) "Δεν βρέθηκαν έγγραφα με αυτά τα φίλτρα." else "Δεν έχεις προσθέσει ακόμη έγγραφα.", Icons.Default.Search) }
         } else {
             LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 items(documents, key = { it.id }) { document ->
@@ -421,12 +428,20 @@ private fun DocumentDetailScreen(document: DocumentEntity, viewModel: FolderView
         item { OutlinedButton(onClick = { onOpen(document.id) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.OpenInNew, null); Spacer(Modifier.width(8.dp)); Text("Άνοιγμα ως PDF σε άλλη εφαρμογή") } }
         item { OutlinedButton(onClick = { onShare(document.id) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Share, null); Spacer(Modifier.width(8.dp)); Text("Κοινοποίηση ολόκληρου εγγράφου") } }
         if (document.expiryDate != null) item { InfoCard("Ημερομηνία λήξης", document.expiryDate, Icons.Default.CalendarMonth) }
+        if (document.expiryDateSuggestion != null) item {
+            InfoCard(
+                "Πρόταση ημερομηνίας λήξης — δεν έχει επιβεβαιωθεί",
+                "${document.expiryDateSuggestion} (${confidenceLabel(document.expiryDateSuggestionConfidence)})",
+                Icons.Default.WarningAmber
+            )
+        }
         if (document.provider.isNotBlank() || document.protocolNumber != null) item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Στοιχεία", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 if (document.provider.isNotBlank()) InfoRow("Φορέας", document.provider)
                 document.protocolNumber?.let { InfoRow("Αριθμός πρωτοκόλλου", it) }
                 document.issuedDate?.let { InfoRow("Ημερομηνία έκδοσης", it) }
+                InfoRow("Βεβαιότητα κατηγορίας", confidenceLabel(document.categoryConfidence))
             }
         }
         item {
@@ -588,6 +603,14 @@ private fun DocumentCard(document: DocumentEntity, onClick: () -> Unit, selected
 @Composable
 private fun CaseCard(caseEntity: CaseEntity, onClick: () -> Unit) { Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Assignment, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(caseEntity.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(caseEntity.nextStep.ifBlank { caseEntity.description.ifBlank { "Χωρίς επόμενο βήμα" } }, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }; AssistChip(onClick = {}, label = { Text(caseEntity.status, fontSize = 11.sp) }) } } }
 
+private fun confidenceLabel(value: String): String = when (value) {
+    MetadataConfidence.HIGH -> "υψηλή"
+    MetadataConfidence.MEDIUM -> "μεσαία"
+    MetadataConfidence.LOW -> "χαμηλή"
+    MetadataConfidence.MANUAL -> "χειροκίνητη"
+    else -> "άγνωστη"
+}
+
 @Composable
 private fun InfoCard(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector) { Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = MaterialTheme.colorScheme.onTertiaryContainer); Spacer(Modifier.width(10.dp)); Column { Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onTertiaryContainer); Text(value, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onTertiaryContainer) } } } }
 
@@ -614,7 +637,11 @@ private fun LockedScreen() {
 
 @Composable
 private fun ReminderCard(reminder: ReminderEntity, onDone: () -> Unit) {
-    val date = remember(reminder.dueAt) {
+    val deadline = remember(reminder.deadlineAt, reminder.dueAt, reminder.leadDays) {
+        Instant.ofEpochMilli(reminder.deadlineAt.takeIf { it > 0L } ?: (reminder.dueAt + reminder.leadDays * 86_400_000L))
+            .atZone(ZoneId.systemDefault()).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+    }
+    val trigger = remember(reminder.dueAt) {
         Instant.ofEpochMilli(reminder.dueAt).atZone(ZoneId.systemDefault()).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
     }
     Card(Modifier.fillMaxWidth()) {
@@ -623,7 +650,8 @@ private fun ReminderCard(reminder: ReminderEntity, onDone: () -> Unit) {
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(reminder.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("Προθεσμία: $date", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                Text("Πραγματική προθεσμία: $deadline", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                Text("Ειδοποίηση: $trigger", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
             }
             IconButton(onClick = onDone) { Icon(Icons.Default.Check, "Ολοκληρώθηκε") }
         }

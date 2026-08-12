@@ -47,6 +47,7 @@ fun DocumentViewerScreen(document: DocumentEntity, onClose: () -> Unit) {
     var pages by remember(document.id, document.updatedAt) { mutableStateOf(emptyList<com.angel.personalfolder.data.LogicalDocumentPage>()) }
     var pageIndex by remember(document.id, document.updatedAt) { mutableStateOf(0) }
     var bitmap by remember(document.id, document.updatedAt) { mutableStateOf<Bitmap?>(null) }
+    var bitmapPageIndex by remember(document.id, document.updatedAt) { mutableStateOf<Int?>(null) }
     var error by remember(document.id, document.updatedAt) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(document.id, document.updatedAt) {
@@ -55,14 +56,19 @@ fun DocumentViewerScreen(document: DocumentEntity, onClose: () -> Unit) {
             .onFailure { error = it.message ?: "Δεν ήταν δυνατή η ανάγνωση του εγγράφου." }
     }
     LaunchedEffect(document.id, pageIndex, pages) {
-        val page = pages.getOrNull(pageIndex) ?: return@LaunchedEffect
+        val requestedPageIndex = pageIndex
+        val page = pages.getOrNull(requestedPageIndex) ?: return@LaunchedEffect
+        bitmap?.recycle()
+        bitmap = null
+        bitmapPageIndex = null
         var loaded: Bitmap? = null
         try {
             loaded = withContext(Dispatchers.IO) { service.renderPage(document, page) }
-            val previous = bitmap
-            bitmap = loaded
-            previous?.recycle()
-            loaded = null
+            if (pageIndex == requestedPageIndex) {
+                bitmap = loaded
+                bitmapPageIndex = requestedPageIndex
+                loaded = null
+            }
         } catch (failure: Throwable) {
             error = failure.message ?: "Δεν ήταν δυνατή η εμφάνιση της σελίδας."
         } finally {
@@ -94,7 +100,7 @@ fun DocumentViewerScreen(document: DocumentEntity, onClose: () -> Unit) {
                     TextButton(onClick = onClose) { Text("Κλείσιμο") }
                 }
                 pages.isEmpty() -> CircularProgressIndicator()
-                bitmap == null -> CircularProgressIndicator()
+                bitmap == null || bitmapPageIndex != pageIndex -> CircularProgressIndicator()
                 else -> Image(
                     bitmap!!.asImageBitmap(),
                     contentDescription = "Σελίδα ${pageIndex + 1}",

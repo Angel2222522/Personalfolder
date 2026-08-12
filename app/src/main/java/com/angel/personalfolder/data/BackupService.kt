@@ -9,8 +9,6 @@ import com.angel.personalfolder.security.BackupCrypto
 import com.angel.personalfolder.security.FileCrypto
 import com.angel.personalfolder.workers.OcrWorker
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -31,73 +29,101 @@ class BackupService(private val context: Context) {
 
     /** Repairs a restore interrupted between the filesystem swap and the Room transaction. */
     suspend fun recoverInterruptedRestore() = withContext(Dispatchers.IO) {
-        val journalFile = context.filesDir.resolve(RESTORE_JOURNAL)
-        if (!journalFile.isFile) return@withContext
-        val journal = runCatching { JSONObject(journalFile.readText(Charsets.UTF_8)) }.getOrNull()
-            ?: return@withContext
-        val root = safeJournalFile(journal.optString("root"), context.filesDir)
-        val previous = safeJournalFile(journal.optString("previousRoot"), context.cacheDir)
-        val staging = safeJournalFile(journal.optString("stagingRoot"), context.cacheDir)
-        if (root == null || previous == null || staging == null) return@withContext
-        val expectedIds = buildSet {
-            val ids = journal.optJSONArray("documentIds") ?: return@buildSet
-            for (index in 0 until ids.length()) add(ids.optString(index))
+        DataOperationCoordinator.withExclusive {
+            val journalFile = context.filesDir.resolve(RESTORE_JOURNAL)
+            if (!journalFile.isFile) return@withExclusive
+            val journal = runCatching { JSONObject(journalFile.readText(Charsets.UTF_8)) }.getOrNull()
+                ?: return@withExclusive
+            val root = safeJournalFile(journal.optString("root"), context.filesDir.resolve("documents"))
+            val previous = safeJournalFile(journal.optString("previousRoot"), context.cacheDir)
+            val staging = safeJournalFile(journal.optString("stagingRoot"), context.cacheDir)
+            if (root == null || previous == null || staging == null) return@withExclusive
+            val expectedIds = buildSet {
+                val ids = journal.optJSONArray("documentIds") ?: return@buildSet
+                for (index in 0 until ids.length()) add(ids.optString(index))
+            }
+            val currentIds = database.documentDao().getAll().map { it.id }.toSet()
+            val state = RestoreRecoveryState(
+                phase = journal.optString("phase"),
+                currentDocumentIds = currentIds,
+                expectedDocumentIds = expectedIds,
+                rootExists = root.isDirectory,
+                previousRootExists = previous.isDirectory,
+                stagingRootExists = staging.isDirectory,
+                rootMatchesExpected = rootMatchesExpected(root, expectedIds)
+            )
+            when (RestoreRecoveryPolicy.decide(state)) {
+                RestoreRecoveryAction.FINALIZE_NEW_GENERATION -> {
+                    FileCrypto.deleteRecursivelyStrict(previous)
+                    FileCrypto.deleteRecursivelyStrict(staging)
+                    require(!previous.exists() && !staging.exists()) { "Δεν ολοκληρώθηκε ο καθαρισμός της επαναφοράς." }
+                    journalFile.delete()
+                }
+
+                RestoreRecoveryAction.ROLLBACK_TO_PREVIOUS_GENERATION -> {
+                    require(previous.isDirectory) { "Δεν υπάρχει ασφαλές προηγούμενο αντίγραφο για επαναφορά." }
+                    if (root.exists()) FileCrypto.deleteRecursivelyStrict(root)
+                    require(previous.renameTo(root)) { "Δεν ήταν δυνατή η επαναφορά της προηγούμενης γενιάς." }
+                    FileCrypto.deleteRecursivelyStrict(staging)
+                    journalFile.delete()
+                }
+
+                RestoreRecoveryAction.PRESERVE_AND_RETRY -> {
+                    // Never delete the current root when there is no proven
+                    // replacement or previous generation. The journal remains
+                    // so the next startup can make the same evidence-based decision.
+                }
+            }
         }
-        val currentIds = database.documentDao().getAll().map { it.id }.toSet()
-        val filesMatchDatabase = currentIds == expectedIds && expectedIds.all { id ->
-            root.resolve(id).isDirectory && root.resolve(id).listFiles().orEmpty().any { it.isFile }
-        }
-        val phase = journal.optString("phase")
-        if (phase == "database_committed" || (phase != "prepared" && filesMatchDatabase)) {
-            if (previous.exists()) FileCrypto.deleteRecursively(previous)
-            if (staging.exists()) FileCrypto.deleteRecursively(staging)
-        } else {
-            if (root.exists()) FileCrypto.deleteRecursively(root)
-            if (!root.exists() && previous.exists()) previous.renameTo(root)
-            if (staging.exists()) FileCrypto.deleteRecursively(staging)
-        }
-        journalFile.delete()
     }
 
     suspend fun create(destination: Uri, password: String) = withContext(Dispatchers.IO) {
         require(password.length >= MIN_NEW_BACKUP_PASSWORD_LENGTH) { "Ο νέος κωδικός backup πρέπει να έχει τουλάχιστον $MIN_NEW_BACKUP_PASSWORD_LENGTH χαρακτήρες." }
-        val zip = context.cacheDir.resolve("backup/personal_folder_${System.currentTimeMillis()}.zip").apply {
-            parentFile?.mkdirs()
-        }
-        try {
-            val payload = snapshot()
-            ZipOutputStream(FileOutputStream(zip)).use { output ->
-                output.putNextEntry(ZipEntry("backup.json"))
-                output.write(payload.toString().toByteArray(Charsets.UTF_8))
-                output.closeEntry()
-                val pages = database.documentPageDao().getAll().distinctBy { it.documentId to it.pageIndex }
-                pages.forEach { page ->
-                    val source = File(page.encryptedPath)
-                    require(FileCrypto.isPrivateDocumentFile(context, source)) { "Η σελίδα βρίσκεται εκτός του ιδιωτικού χώρου." }
-                    require(source.isFile) { "Λείπει σελίδα από το έγγραφο ${page.documentId}." }
-                    val plain = context.cacheDir.resolve("backup/plain_${UUID.randomUUID()}.tmp").apply { parentFile?.mkdirs() }
-                    try {
-                        FileCrypto.decryptToTemp(source, plain)
-                        output.putNextEntry(ZipEntry("files/${page.documentId}/${page.pageIndex}.pf"))
-                        FileInputStream(plain).use { it.copyLimitedTo(output, MAX_BACKUP_BYTES) }
-                        output.closeEntry()
-                    } finally {
-                        plain.delete()
+        DataOperationCoordinator.withExclusive {
+            val zip = context.cacheDir.resolve("backup/personal_folder_${System.currentTimeMillis()}.zip").apply {
+                parentFile?.mkdirs()
+            }
+            try {
+                val payload = snapshot()
+                var payloadBytes = 0L
+                ZipOutputStream(FileOutputStream(zip)).use { output ->
+                    output.putNextEntry(ZipEntry("backup.json"))
+                    val manifestBytes = payload.toString().toByteArray(Charsets.UTF_8)
+                    payloadBytes += manifestBytes.size
+                    require(payloadBytes <= MAX_BACKUP_PAYLOAD_BYTES) { "Το αντίγραφο είναι υπερβολικά μεγάλο." }
+                    output.write(manifestBytes)
+                    output.closeEntry()
+                    val pages = database.documentPageDao().getAll().distinctBy { it.documentId to it.pageIndex }
+                    pages.forEach { page ->
+                        val source = File(page.encryptedPath)
+                        require(FileCrypto.isPrivateDocumentFile(context, source)) { "Η σελίδα βρίσκεται εκτός του ιδιωτικού χώρου." }
+                        require(source.isFile) { "Λείπει σελίδα από το έγγραφο ${page.documentId}." }
+                        val plain = context.cacheDir.resolve("backup/plain_${UUID.randomUUID()}.tmp").apply { parentFile?.mkdirs() }
+                        try {
+                            FileCrypto.decryptToTemp(source, plain)
+                            output.putNextEntry(ZipEntry("files/${page.documentId}/${page.pageIndex}.pf"))
+                            val copied = FileInputStream(plain).use { it.copyLimitedTo(output, MAX_BACKUP_ENTRY_BYTES) }
+                            payloadBytes += copied
+                            require(payloadBytes <= MAX_BACKUP_PAYLOAD_BYTES) { "Το αντίγραφο είναι υπερβολικά μεγάλο." }
+                            output.closeEntry()
+                        } finally {
+                            plain.delete()
+                        }
                     }
                 }
+                BackupCrypto.encryptFile(zip, context, destination, password.toCharArray())
+                true
+            } finally {
+                zip.delete()
             }
-            BackupCrypto.encryptFile(zip, context, destination, password.toCharArray())
-            true
-        } finally {
-            zip.delete()
         }
     }
 
     suspend fun restore(source: Uri, password: String) = withContext(Dispatchers.IO) {
         require(password.length >= MIN_RESTORE_PASSWORD_LENGTH) { "Ο κωδικός επαναφοράς πρέπει να έχει τουλάχιστον $MIN_RESTORE_PASSWORD_LENGTH χαρακτήρες." }
-        restoreMutex.withLock {
-            WorkManager.getInstance(context).cancelAllWorkByTag("document-processing")
-            OcrWorker.awaitIdle()
+        WorkManager.getInstance(context).cancelAllWorkByTag("document-processing")
+        OcrWorker.awaitIdle()
+        DataOperationCoordinator.withExclusive {
             val zip = context.cacheDir.resolve("backup/restore_${System.currentTimeMillis()}.zip").apply {
                 parentFile?.mkdirs()
             }
@@ -120,7 +146,7 @@ class BackupService(private val context: Context) {
             val checklist = database.checklistDao().getAll()
             val reminders = database.reminderDao().getAll()
             JSONObject().apply {
-                put("formatVersion", 3)
+                put("formatVersion", 4)
                 put("createdAt", System.currentTimeMillis())
                 put("documents", JSONArray().apply { documents.forEach { put(documentJson(it)) } })
                 put("pages", JSONArray().apply { pages.forEach { put(pageJson(it)) } })
@@ -137,7 +163,7 @@ class BackupService(private val context: Context) {
         val archive = inspectArchive(zip)
         val manifest = JSONObject(archive.manifest)
         val formatVersion = manifest.optInt("formatVersion", -1)
-        require(formatVersion in 1..3) { "Η έκδοση του αντιγράφου δεν υποστηρίζεται." }
+        require(formatVersion in 1..4) { "Η έκδοση του αντιγράφου δεν υποστηρίζεται." }
         val portableFiles = formatVersion >= 2
         val pageDescriptors = parsePageDescriptors(manifest.optJSONArray("pages"))
         val expectedFiles = pageDescriptors.map { it.entryName }.toSet()
@@ -149,6 +175,9 @@ class BackupService(private val context: Context) {
         val root = context.filesDir.resolve("documents")
         val previousRoot = context.cacheDir.resolve("previous_documents_${UUID.randomUUID()}")
         val stagedFiles = mutableMapOf<String, File>()
+        var previousMoved = false
+        var filesInstalled = false
+        var databaseCommitted = false
         try {
             ZipInputStream(FileInputStream(zip)).use { input ->
                 var entry = input.nextEntry
@@ -160,11 +189,11 @@ class BackupService(private val context: Context) {
                         val descriptor = pageDescriptors.first { it.entryName == name }
                         val staged = stagingRoot.resolve("${descriptor.documentId}/page_${descriptor.pageIndex}.pf")
                         staged.parentFile?.mkdirs()
-                        if (portableFiles) FileCrypto.encrypt(input, staged, MAX_BACKUP_BYTES)
-                        else staged.outputStream().use { input.copyLimitedTo(it, MAX_BACKUP_BYTES) }
+                        if (portableFiles) FileCrypto.encrypt(input, staged, MAX_BACKUP_ENTRY_BYTES)
+                        else staged.outputStream().use { input.copyLimitedTo(it, MAX_BACKUP_ENTRY_BYTES) }
                         stagedFiles[name] = staged
                     } else if (!entry.isDirectory) {
-                        input.discardLimited(MAX_BACKUP_BYTES)
+                        input.discardLimited(MAX_BACKUP_ENTRY_BYTES)
                     }
                     input.closeEntry()
                     entry = input.nextEntry
@@ -191,55 +220,74 @@ class BackupService(private val context: Context) {
                 documentIds = documentIds
             )
 
-            var previousMoved = false
-            try {
-                previousMoved = root.exists() && root.renameTo(previousRoot)
-                require(!root.exists()) { "Δεν ήταν δυνατή η προετοιμασία της επαναφοράς." }
-                require(stagingRoot.renameTo(root)) { "Δεν ήταν δυνατή η εγκατάσταση των αρχείων επαναφοράς." }
-                writeRestoreJournal("files_installed", root, previousRoot, stagingRoot, documentIds)
-                try {
-                    database.withTransaction {
-                        database.caseDocumentDao().deleteAll()
-                        database.timelineDao().deleteAll()
-                        database.checklistDao().deleteAll()
-                        database.reminderDao().deleteAll()
-                        database.documentPageDao().deleteAll()
-                        database.documentDao().deleteAll()
-                        database.caseDao().deleteAll()
-                        database.documentDao().insertAll(documents)
-                        database.documentPageDao().insertAll(documents.flatMap { document ->
-                            pageDescriptors.filter { it.documentId == document.id }.map { descriptor ->
-                                DocumentPageEntity(
-                                    documentId = descriptor.documentId,
-                                    pageIndex = descriptor.pageIndex,
-                                    encryptedPath = root.resolve("${descriptor.documentId}/page_${descriptor.pageIndex}.pf").absolutePath,
-                                    ocrText = descriptor.ocrText,
-                                    sourceFileName = descriptor.sourceFileName,
-                                    mimeType = descriptor.mimeType
-                                )
-                            }
-                        })
-                        database.caseDao().insertAll(cases)
-                        relations.forEach { database.caseDocumentDao().insert(it) }
-                        events.forEach { database.timelineDao().insert(it) }
-                        checklist.forEach { database.checklistDao().insert(it) }
-                        reminders.forEach { database.reminderDao().insert(it) }
-                    }
-                    writeRestoreJournal("database_committed", root, previousRoot, stagingRoot, documentIds)
-                } catch (error: Throwable) {
-                    FileCrypto.deleteRecursively(root)
-                    if (previousMoved) previousRoot.renameTo(root)
-                    throw error
-                }
-                if (previousMoved) FileCrypto.deleteRecursively(previousRoot)
-                ReminderScheduler.rescheduleAll(context)
-                clearRestoreJournal()
-            } finally {
-                if (stagingRoot.exists()) FileCrypto.deleteRecursively(stagingRoot)
-                if (previousMoved && previousRoot.exists() && !root.exists()) previousRoot.renameTo(root)
-                if (root.exists() && !previousRoot.exists()) clearRestoreJournal()
+            previousMoved = if (root.exists()) {
+                require(root.renameTo(previousRoot)) { "Δεν ήταν δυνατή η προετοιμασία της επαναφοράς." }
+                true
+            } else {
+                false
             }
+            require(!root.exists()) { "Δεν ήταν δυνατή η προετοιμασία της επαναφοράς." }
+            require(stagingRoot.renameTo(root)) { "Δεν ήταν δυνατή η εγκατάσταση των αρχείων επαναφοράς." }
+            filesInstalled = true
+            writeRestoreJournal("files_installed", root, previousRoot, stagingRoot, documentIds)
+
+            database.withTransaction {
+                database.caseDocumentDao().deleteAll()
+                database.timelineDao().deleteAll()
+                database.checklistDao().deleteAll()
+                database.reminderDao().deleteAll()
+                database.documentPageDao().deleteAll()
+                database.documentDao().deleteAll()
+                database.caseDao().deleteAll()
+                database.documentDao().insertAll(documents)
+                database.documentPageDao().insertAll(documents.flatMap { document ->
+                    pageDescriptors.filter { it.documentId == document.id }.map { descriptor ->
+                        DocumentPageEntity(
+                            documentId = descriptor.documentId,
+                            pageIndex = descriptor.pageIndex,
+                            encryptedPath = root.resolve("${descriptor.documentId}/page_${descriptor.pageIndex}.pf").absolutePath,
+                            ocrText = descriptor.ocrText,
+                            sourceFileName = descriptor.sourceFileName,
+                            mimeType = descriptor.mimeType
+                        )
+                    }
+                })
+                database.caseDao().insertAll(cases)
+                relations.forEach { database.caseDocumentDao().insert(it) }
+                events.forEach { database.timelineDao().insert(it) }
+                checklist.forEach { database.checklistDao().insert(it) }
+                reminders.forEach { database.reminderDao().insert(it) }
+            }
+            databaseCommitted = true
+            // If this write fails, the new DB and files are deliberately kept;
+            // startup recovery will finalize them instead of rolling them back.
+            writeRestoreJournal("database_committed", root, previousRoot, stagingRoot, documentIds)
+            ReminderScheduler.rescheduleAll(context)
+            FileCrypto.deleteRecursivelyStrict(previousRoot)
+            clearRestoreJournal()
+        } catch (error: Throwable) {
+            if (!databaseCommitted && filesInstalled) {
+                val rollbackSucceeded = runCatching {
+                    FileCrypto.deleteRecursivelyStrict(root)
+                    if (previousMoved) {
+                        require(previousRoot.renameTo(root)) { "Δεν ήταν δυνατή η επαναφορά της προηγούμενης γενιάς." }
+                    }
+                    clearRestoreJournal()
+                }.isSuccess
+                if (!rollbackSucceeded) {
+                    // Keep the journal: deleting it here would make the only
+                    // remaining recovery evidence disappear after a process death.
+                }
+            } else if (!databaseCommitted && !filesInstalled) {
+                // The live root was never moved or replaced, so clearing the
+                // prepared journal is safe and avoids pinning a disposable
+                // staging tree after a validation/install failure.
+                clearRestoreJournal()
+            }
+            throw error
         } finally {
+            // This is disposable staging only. The live root and previous root
+            // are handled by the journal protocol above.
             if (stagingRoot.exists()) FileCrypto.deleteRecursively(stagingRoot)
         }
     }
@@ -279,6 +327,20 @@ class BackupService(private val context: Context) {
                     if (it == ProcessingState.QUEUED || it == ProcessingState.PROCESSING) "Η επεξεργασία δεν συνεχίστηκε μετά την επαναφορά. Επίλεξε επανάληψη OCR." else null
                 },
                 metadataManuallyEdited = item.optBoolean("metadataManuallyEdited", false),
+                expiryDateSuggestion = item.optNullableString("expiryDateSuggestion"),
+                expiryDateSuggestionConfidence = item.optString("expiryDateSuggestionConfidence", MetadataConfidence.NONE),
+                titleConfidence = item.optString("titleConfidence", MetadataConfidence.UNKNOWN),
+                categoryConfidence = item.optString("categoryConfidence", MetadataConfidence.UNKNOWN),
+                providerConfidence = item.optString("providerConfidence", MetadataConfidence.UNKNOWN),
+                issuedDateConfidence = item.optString("issuedDateConfidence", MetadataConfidence.UNKNOWN),
+                expiryDateConfidence = item.optString("expiryDateConfidence", MetadataConfidence.UNKNOWN),
+                protocolNumberConfidence = item.optString("protocolNumberConfidence", MetadataConfidence.UNKNOWN),
+                titleManuallyEdited = item.optBoolean("titleManuallyEdited", item.optBoolean("metadataManuallyEdited", false)),
+                categoryManuallyEdited = item.optBoolean("categoryManuallyEdited", item.optBoolean("metadataManuallyEdited", false)),
+                providerManuallyEdited = item.optBoolean("providerManuallyEdited", item.optBoolean("metadataManuallyEdited", false)),
+                issuedDateManuallyEdited = item.optBoolean("issuedDateManuallyEdited", item.optBoolean("metadataManuallyEdited", false)),
+                expiryDateManuallyEdited = item.optBoolean("expiryDateManuallyEdited", item.optBoolean("metadataManuallyEdited", false)),
+                protocolNumberManuallyEdited = item.optBoolean("protocolNumberManuallyEdited", item.optBoolean("metadataManuallyEdited", false)),
                 createdAt = item.optLong("createdAt", System.currentTimeMillis()),
                 updatedAt = item.optLong("updatedAt", System.currentTimeMillis())
             )
@@ -374,7 +436,10 @@ class BackupService(private val context: Context) {
             val id = requireSafeId(x.getString("id")); require(seen.add(id)) { "Το αντίγραφο περιέχει διπλή υπενθύμιση." }
             val dueAt = x.getLong("dueAt")
             require(dueAt in 0L..MAX_DUE_AT) { "Η υπενθύμιση έχει μη έγκυρη ημερομηνία." }
-            add(ReminderEntity(id, x.getString("title").take(500), dueAt, documentId, caseId, x.optInt("leadDays").coerceIn(0, 3650), x.optBoolean("isDone")))
+            val leadDays = x.optInt("leadDays").coerceIn(0, 3650)
+            val deadlineAt = x.optLong("deadlineAt", dueAt + leadDays * 86_400_000L)
+                .coerceIn(0L, MAX_DUE_AT)
+            add(ReminderEntity(id, x.getString("title").take(500), dueAt, documentId, caseId, leadDays, x.optBoolean("isDone"), deadlineAt))
         }
     }
 
@@ -396,9 +461,9 @@ class BackupService(private val context: Context) {
                 require(names.add(name)) { "Το αντίγραφο περιέχει διπλό αρχείο." }
                 if (!entry.isDirectory) {
                     val data = if (name == "backup.json") input.readLimited(MAX_MANIFEST_BYTES) else null
-                    if (data != null) manifest = data.toString(Charsets.UTF_8) else input.discardLimited(MAX_BACKUP_BYTES)
+                    if (data != null) manifest = data.toString(Charsets.UTF_8) else input.discardLimited(MAX_BACKUP_ENTRY_BYTES)
                     totalBytes += entryBytesRead
-                    require(totalBytes <= MAX_BACKUP_BYTES) { "Το αντίγραφο είναι υπερβολικά μεγάλο." }
+                    require(totalBytes <= MAX_BACKUP_ARCHIVE_BYTES) { "Το αντίγραφο είναι υπερβολικά μεγάλο." }
                 }
                 input.closeEntry(); entry = input.nextEntry
             }
@@ -434,11 +499,22 @@ class BackupService(private val context: Context) {
         context.filesDir.resolve(RESTORE_JOURNAL).delete()
     }
 
+    private fun rootMatchesExpected(root: File, expectedIds: Set<String>): Boolean {
+        if (!root.isDirectory) return false
+        val actualIds = root.listFiles().orEmpty()
+            .filter { it.isDirectory }
+            .map { it.name }
+            .toSet()
+        return actualIds == expectedIds && expectedIds.all { id ->
+            root.resolve(id).listFiles().orEmpty().any { it.isFile && it.name.endsWith(".pf") }
+        }
+    }
+
     private fun safeJournalFile(path: String, expectedParent: File): File? {
         if (path.isBlank()) return null
         val parent = runCatching { expectedParent.canonicalFile }.getOrNull() ?: return null
         val candidate = runCatching { File(path).canonicalFile }.getOrNull() ?: return null
-        return if (candidate.parentFile == parent || candidate.toPath().startsWith(parent.toPath())) candidate else null
+        return if (candidate == parent || candidate.parentFile == parent || candidate.toPath().startsWith(parent.toPath())) candidate else null
     }
 
     private fun validateEntryName(value: String): String {
@@ -459,14 +535,14 @@ class BackupService(private val context: Context) {
     }
 
     private fun documentJson(item: DocumentEntity) = JSONObject().apply {
-        put("id", item.id); put("title", item.title); put("originalFileName", item.originalFileName); put("mimeType", item.mimeType); put("pageCount", item.pageCount); put("category", item.category); put("tags", item.tags); put("provider", item.provider); putNullable("issuedDate", item.issuedDate); putNullable("expiryDate", item.expiryDate); putNullable("protocolNumber", item.protocolNumber); put("ocrText", item.ocrText); put("extractedMetadataJson", item.extractedMetadataJson); put("processingState", item.processingState); putNullable("processingError", item.processingError); put("metadataManuallyEdited", item.metadataManuallyEdited); put("createdAt", item.createdAt); put("updatedAt", item.updatedAt)
+        put("id", item.id); put("title", item.title); put("originalFileName", item.originalFileName); put("mimeType", item.mimeType); put("pageCount", item.pageCount); put("category", item.category); put("tags", item.tags); put("provider", item.provider); putNullable("issuedDate", item.issuedDate); putNullable("expiryDate", item.expiryDate); putNullable("protocolNumber", item.protocolNumber); put("ocrText", item.ocrText); put("extractedMetadataJson", item.extractedMetadataJson); put("processingState", item.processingState); putNullable("processingError", item.processingError); put("metadataManuallyEdited", item.metadataManuallyEdited); putNullable("expiryDateSuggestion", item.expiryDateSuggestion); put("expiryDateSuggestionConfidence", item.expiryDateSuggestionConfidence); put("titleConfidence", item.titleConfidence); put("categoryConfidence", item.categoryConfidence); put("providerConfidence", item.providerConfidence); put("issuedDateConfidence", item.issuedDateConfidence); put("expiryDateConfidence", item.expiryDateConfidence); put("protocolNumberConfidence", item.protocolNumberConfidence); put("titleManuallyEdited", item.titleManuallyEdited); put("categoryManuallyEdited", item.categoryManuallyEdited); put("providerManuallyEdited", item.providerManuallyEdited); put("issuedDateManuallyEdited", item.issuedDateManuallyEdited); put("expiryDateManuallyEdited", item.expiryDateManuallyEdited); put("protocolNumberManuallyEdited", item.protocolNumberManuallyEdited); put("createdAt", item.createdAt); put("updatedAt", item.updatedAt)
     }
 
     private fun pageJson(item: DocumentPageEntity) = JSONObject().apply { put("documentId", item.documentId); put("pageIndex", item.pageIndex); put("ocrText", item.ocrText); put("sourceFileName", item.sourceFileName); put("mimeType", item.mimeType) }
     private fun caseJson(item: CaseEntity) = JSONObject().apply { put("id", item.id); put("title", item.title); put("description", item.description); put("status", item.status); putNullable("startDate", item.startDate); putNullable("deadline", item.deadline); put("nextStep", item.nextStep); put("notes", item.notes); put("createdAt", item.createdAt); put("updatedAt", item.updatedAt) }
     private fun eventJson(item: TimelineEventEntity) = JSONObject().apply { put("id", item.id); put("caseId", item.caseId); put("title", item.title); put("note", item.note); put("eventType", item.eventType); put("eventDate", item.eventDate); put("createdAt", item.createdAt) }
     private fun checklistJson(item: ChecklistItemEntity) = JSONObject().apply { put("id", item.id); put("caseId", item.caseId); put("title", item.title); put("isComplete", item.isComplete); putNullable("linkedDocumentId", item.linkedDocumentId); put("createdAt", item.createdAt) }
-    private fun reminderJson(item: ReminderEntity) = JSONObject().apply { put("id", item.id); put("title", item.title); put("dueAt", item.dueAt); putNullable("documentId", item.documentId); putNullable("caseId", item.caseId); put("leadDays", item.leadDays); put("isDone", item.isDone) }
+    private fun reminderJson(item: ReminderEntity) = JSONObject().apply { put("id", item.id); put("title", item.title); put("dueAt", item.dueAt); putNullable("documentId", item.documentId); putNullable("caseId", item.caseId); put("leadDays", item.leadDays); put("isDone", item.isDone); put("deadlineAt", item.deadlineAt) }
 
     private fun JSONObject.putNullable(key: String, value: String?) { put(key, value ?: JSONObject.NULL) }
     private fun JSONObject.optNullableString(key: String): String? = if (isNull(key)) null else optString(key).ifBlank { null }
@@ -502,8 +578,9 @@ class BackupService(private val context: Context) {
     private object NullOutputStream : OutputStream() { override fun write(b: Int) = Unit; override fun write(b: ByteArray, off: Int, len: Int) = Unit }
 
     private companion object {
-        val restoreMutex = Mutex()
-        const val MAX_BACKUP_BYTES = 512L * 1024 * 1024
+        const val MAX_BACKUP_ENTRY_BYTES = 512L * 1024 * 1024
+        const val MAX_BACKUP_PAYLOAD_BYTES = 2L * 1024 * 1024 * 1024
+        const val MAX_BACKUP_ARCHIVE_BYTES = MAX_BACKUP_PAYLOAD_BYTES + 32L * 1024 * 1024
         const val MAX_BACKUP_ENTRIES = 10_000
         const val MAX_ENTRY_NAME = 300
         const val MAX_PAGE_INDEX = 100_000

@@ -7,6 +7,7 @@ import android.security.keystore.KeyProperties
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.security.KeyStore
 import javax.crypto.Cipher
@@ -108,6 +109,21 @@ object FileCrypto {
     fun deleteRecursively(file: File) {
         if (file.isDirectory) file.listFiles()?.forEach(::deleteRecursively)
         file.delete()
+    }
+
+    /**
+     * Deletes a recovery/quarantine tree without silently leaving a partial
+     * generation behind. Best-effort cleanup remains available above for
+     * disposable cache files.
+     */
+    fun deleteRecursivelyStrict(file: File) {
+        if (!file.exists()) return
+        if (file.isDirectory) {
+            file.listFiles()?.forEach(::deleteRecursivelyStrict)
+        }
+        if (file.exists() && !file.delete()) {
+            throw IOException("Δεν ήταν δυνατή η διαγραφή του ${file.absolutePath}.")
+        }
     }
 
     fun isPrivateDocumentFile(context: Context, file: File): Boolean {

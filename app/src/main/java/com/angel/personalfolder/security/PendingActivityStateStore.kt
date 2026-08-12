@@ -1,0 +1,77 @@
+package com.angel.personalfolder.security
+
+import android.content.Context
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+
+/** Keeps a short-lived picker password recoverable without putting it in a Bundle or plaintext preferences. */
+object PendingActivityStateStore {
+    private const val KEY_ALIAS = "personal_folder_pending_activity_key"
+    private const val PREFS = "pending_activity_state"
+    private const val PASSWORD = "encrypted_password"
+    private const val CREATED_AT = "created_at"
+    private const val MAX_AGE_MS = 15 * 60 * 1000L
+
+    fun savePassword(context: Context, password: String) {
+        val iv = ByteArray(12).also { java.security.SecureRandom().nextBytes(it) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+            init(Cipher.ENCRYPT_MODE, key(), GCMParameterSpec(128, iv))
+        }
+        val encrypted = cipher.doFinal(password.toByteArray(Charsets.UTF_8))
+        val payload = ByteArray(iv.size + encrypted.size).apply {
+            iv.copyInto(this)
+            encrypted.copyInto(this, iv.size)
+        }
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(PASSWORD, Base64.encodeToString(payload, Base64.NO_WRAP))
+            .putLong(CREATED_AT, System.currentTimeMillis())
+            .apply()
+    }
+
+    fun consumePassword(context: Context): String? {
+        val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val createdAt = preferences.getLong(CREATED_AT, 0L)
+        val encoded = preferences.getString(PASSWORD, null)
+        if (encoded == null || createdAt <= 0L || System.currentTimeMillis() - createdAt > MAX_AGE_MS) {
+            clear(context)
+            return null
+        }
+        return runCatching {
+            val payload = Base64.decode(encoded, Base64.DEFAULT)
+            require(payload.size > 12) { "Μη έγκυρη προσωρινή κατάσταση." }
+            val iv = payload.copyOfRange(0, 12)
+            val ciphertext = payload.copyOfRange(12, payload.size)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+                init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
+            }
+            String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+        }.also { clear(context) }.getOrNull()
+    }
+
+    fun clear(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .remove(PASSWORD).remove(CREATED_AT).apply()
+    }
+
+    private fun key(): SecretKey {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").run {
+            init(
+                android.security.keystore.KeyGenParameterSpec.Builder(
+                    KEY_ALIAS,
+                    android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or android.security.keystore.KeyProperties.PURPOSE_DECRYPT
+                ).setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setUserAuthenticationRequired(false)
+                    .build()
+            )
+            generateKey()
+        }
+    }
+}

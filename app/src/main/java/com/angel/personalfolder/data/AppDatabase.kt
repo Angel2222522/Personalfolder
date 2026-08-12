@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ChecklistItemEntity::class,
         ReminderEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -171,6 +171,7 @@ abstract class AppDatabase : RoomDatabase() {
                 database.execSQL("DROP TABLE checklist_items")
                 database.execSQL("ALTER TABLE checklist_items_new RENAME TO checklist_items")
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_checklist_items_caseId ON checklist_items(caseId)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_checklist_items_linkedDocumentId ON checklist_items(linkedDocumentId)")
 
                 database.execSQL("""
                     CREATE TABLE reminders_new (
@@ -204,12 +205,55 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE documents ADD COLUMN expiryDateSuggestion TEXT")
+                database.execSQL("ALTER TABLE documents ADD COLUMN expiryDateSuggestionConfidence TEXT NOT NULL DEFAULT 'none'")
+                database.execSQL("ALTER TABLE documents ADD COLUMN titleConfidence TEXT NOT NULL DEFAULT 'unknown'")
+                database.execSQL("ALTER TABLE documents ADD COLUMN categoryConfidence TEXT NOT NULL DEFAULT 'unknown'")
+                database.execSQL("ALTER TABLE documents ADD COLUMN providerConfidence TEXT NOT NULL DEFAULT 'unknown'")
+                database.execSQL("ALTER TABLE documents ADD COLUMN issuedDateConfidence TEXT NOT NULL DEFAULT 'unknown'")
+                database.execSQL("ALTER TABLE documents ADD COLUMN expiryDateConfidence TEXT NOT NULL DEFAULT 'unknown'")
+                database.execSQL("ALTER TABLE documents ADD COLUMN protocolNumberConfidence TEXT NOT NULL DEFAULT 'unknown'")
+                database.execSQL("ALTER TABLE documents ADD COLUMN titleManuallyEdited INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE documents ADD COLUMN categoryManuallyEdited INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE documents ADD COLUMN providerManuallyEdited INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE documents ADD COLUMN issuedDateManuallyEdited INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE documents ADD COLUMN expiryDateManuallyEdited INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE documents ADD COLUMN protocolNumberManuallyEdited INTEGER NOT NULL DEFAULT 0")
+
+                // Version 3 had only one global ownership flag. Treat fields that
+                // were explicitly edited under that contract as manually owned;
+                // all other old OCR values remain non-authoritative until re-read.
+                database.execSQL("""
+                    UPDATE documents SET
+                        titleManuallyEdited = metadataManuallyEdited,
+                        categoryManuallyEdited = metadataManuallyEdited,
+                        providerManuallyEdited = metadataManuallyEdited,
+                        issuedDateManuallyEdited = metadataManuallyEdited,
+                        expiryDateManuallyEdited = metadataManuallyEdited,
+                        protocolNumberManuallyEdited = metadataManuallyEdited,
+                        titleConfidence = CASE WHEN metadataManuallyEdited = 1 THEN 'manual' ELSE 'unknown' END,
+                        categoryConfidence = CASE WHEN metadataManuallyEdited = 1 THEN 'manual' ELSE 'unknown' END,
+                        providerConfidence = CASE WHEN metadataManuallyEdited = 1 THEN 'manual' ELSE 'unknown' END,
+                        issuedDateConfidence = CASE WHEN metadataManuallyEdited = 1 THEN 'manual' ELSE 'unknown' END,
+                        expiryDateConfidence = CASE WHEN metadataManuallyEdited = 1 THEN 'manual' ELSE 'unknown' END,
+                        protocolNumberConfidence = CASE WHEN metadataManuallyEdited = 1 THEN 'manual' ELSE 'unknown' END
+                """.trimIndent())
+
+                database.execSQL("ALTER TABLE reminders ADD COLUMN deadlineAt INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("UPDATE reminders SET deadlineAt = dueAt + (leadDays * 86400000) WHERE deadlineAt = 0")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_checklist_items_linkedDocumentId ON checklist_items(linkedDocumentId)")
+                createSearchIndex(database)
+            }
+        }
+
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java,
                 "personal_folder.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .addCallback(object : RoomDatabase.Callback() {
                     override fun onCreate(database: SupportSQLiteDatabase) {
                         createSearchIndex(database)
@@ -260,7 +304,14 @@ abstract class AppDatabase : RoomDatabase() {
                     }
                 }
             }
-            if (count == 0L && documents.isNotEmpty()) {
+            val ftsIds = database.query("SELECT documentId FROM documents_fts").use { cursor ->
+                buildSet {
+                    while (cursor.moveToNext()) add(cursor.getString(0))
+                }
+            }
+            val documentIds = documents.mapNotNull { it[0] as? String }.toSet()
+            if (count != documents.size.toLong() || ftsIds != documentIds) {
+                database.execSQL("DELETE FROM documents_fts")
                 val statement = database.compileStatement(
                     "INSERT INTO documents_fts(documentId, title, originalFileName, ocrText, provider, category, tags, protocolNumber) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
                 )

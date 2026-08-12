@@ -7,6 +7,7 @@ import android.app.Notification
 import android.os.Build
 import com.angel.personalfolder.data.AppDatabase
 import com.angel.personalfolder.data.BackupService
+import com.angel.personalfolder.data.DocumentDeletionRecovery
 import com.angel.personalfolder.data.ReminderScheduler
 import com.angel.personalfolder.security.TempFileCleaner
 import kotlinx.coroutines.CoroutineScope
@@ -24,6 +25,11 @@ class PersonalFolderApp : Application() {
                 BackupService(this@PersonalFolderApp).recoverInterruptedRestore()
             } catch (error: Throwable) {
                 android.util.Log.w("PersonalFolder", "Restore recovery was not completed: ${error::class.java.simpleName}")
+            }
+            try {
+                DocumentDeletionRecovery.recover(this@PersonalFolderApp, database)
+            } catch (error: Throwable) {
+                android.util.Log.w("PersonalFolder", "Document deletion recovery was not completed: ${error::class.java.simpleName}")
             }
             TempFileCleaner.recover(this@PersonalFolderApp)
             ReminderScheduler.rescheduleAll(this@PersonalFolderApp)

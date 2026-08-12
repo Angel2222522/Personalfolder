@@ -60,5 +60,37 @@ class MetadataExtractorTest {
         val result = MetadataExtractor.extract("Εκδόθηκε 01/01/2024\nΑναφορά 02/02/2025", "Έγγραφο")
         assertEquals("2025-02-02", result.expiryDate)
         assertEquals("low", result.expiryConfidence)
+        assertTrue(result.json.contains("fallback:last-date"))
+    }
+
+    @Test
+    fun acceptsOnlyProtocolLabelsAndKeepsTheWholeValue() {
+        val validLabels = listOf(
+            "Αριθμός μητρώου: 12345",
+            "Αρ. Πρωτ.: 12345/2026",
+            "Αρ. Πρωτοκόλλου: ΑΒ-123/7",
+            "Αριθμός πρωτοκόλλου: 991"
+        )
+        assertEquals(null, MetadataExtractor.extract(validLabels.first(), "Έγγραφο").protocolNumber)
+        assertEquals("12345/2026", MetadataExtractor.extract(validLabels[1], "Έγγραφο").protocolNumber)
+        assertEquals("αβ-123/7", MetadataExtractor.extract(validLabels[2], "Έγγραφο").protocolNumber)
+        assertEquals("991", MetadataExtractor.extract(validLabels[3], "Έγγραφο").protocolNumber)
+    }
+
+    @Test
+    fun prefersSpecificIssuingAuthorityOverGenericStateHeading() {
+        val result = MetadataExtractor.extract(
+            "Ελληνική Δημοκρατία\nΥπουργείο Παιδείας\nΔιεύθυνση Διοικητικού",
+            "Έγγραφο"
+        )
+        assertEquals("Υπουργείο Παιδείας", result.provider)
+        assertTrue(result.providerConfidence == "high" || result.providerConfidence == "medium")
+    }
+
+    @Test
+    fun usesUiCategoriesAndSpecificEmploymentRule() {
+        val result = MetadataExtractor.extract("Σύμβαση εργασίας\nΕργοδότης", "Έγγραφο")
+        assertEquals("Εργασία", result.category)
+        assertTrue(result.categoryConfidence == "high" || result.categoryConfidence == "medium")
     }
 }

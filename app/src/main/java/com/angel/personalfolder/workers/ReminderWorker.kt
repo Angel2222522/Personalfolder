@@ -21,7 +21,10 @@ class ReminderWorker(appContext: Context, params: WorkerParameters) : CoroutineW
             ?: return Result.success()
         if (reminder.isDone) return Result.success()
         if (ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            return Result.success()
+            // Keep the row pending. WorkManager will retry with backoff and
+            // the app also reschedules all pending rows when permission is
+            // granted or the activity resumes.
+            return Result.retry()
         }
         val pendingIntent = PendingIntent.getActivity(
             applicationContext, id.hashCode(), Intent(applicationContext, MainActivity::class.java),

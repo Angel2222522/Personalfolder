@@ -31,9 +31,9 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
-    fun migratesV1ToV3WithoutLosingRowsOrRelations() = runBlocking {
+    fun migratesV1ToV4WithoutLosingRowsOrRelations() = runBlocking {
         val database = Room.databaseBuilder(context, AppDatabase::class.java, databaseName)
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
             .build()
         try {
             assertNotNull(database.documentDao().getById("doc-1"))
@@ -42,6 +42,13 @@ class AppDatabaseMigrationTest {
             assertEquals(1, database.timelineDao().getAll().size)
             assertEquals(1, database.checklistDao().getAll().size)
             assertEquals(1, database.reminderDao().getAll().size)
+            assertEquals(4102444800000L, database.reminderDao().getAll().single().deadlineAt)
+            assertEquals("unknown", database.documentDao().getById("doc-1")?.expiryDateConfidence)
+            database.openHelper.readableDatabase.query("PRAGMA index_list(checklist_items)").use { cursor ->
+                var found = false
+                while (cursor.moveToNext()) if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == "index_checklist_items_linkedDocumentId") found = true
+                assertEquals(true, found)
+            }
 
             database.documentDao().deleteById("doc-1")
             assertEquals(0, database.documentPageDao().getForDocument("doc-1").size)
