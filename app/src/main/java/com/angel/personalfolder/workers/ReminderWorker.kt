@@ -42,7 +42,14 @@ class ReminderWorker(appContext: Context, params: WorkerParameters) : CoroutineW
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setAutoCancel(true)
             .build()
-        NotificationManagerCompat.from(applicationContext).notify(id.hashCode(), notification)
+        try {
+            NotificationManagerCompat.from(applicationContext).notify(id.hashCode(), notification)
+        } catch (_: SecurityException) {
+            // Permission can be revoked between the check above and notify().
+            // Keep the database row pending so a later permission grant can
+            // reschedule and deliver it.
+            return Result.retry()
+        }
         return Result.success()
     }
 

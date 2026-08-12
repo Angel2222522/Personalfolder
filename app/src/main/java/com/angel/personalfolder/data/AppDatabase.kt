@@ -328,7 +328,7 @@ abstract class AppDatabase : RoomDatabase() {
                 }
             }
             val documentIds = documents.mapNotNull { it[0] as? String }.toSet()
-            if (count != documents.size.toLong() || ftsIds != documentIds) {
+            if (FtsRepairPolicy.requiresRebuild(documents.size, count, documentIds, ftsIds)) {
                 database.execSQL("DELETE FROM documents_fts")
                 val statement = database.compileStatement(
                     "INSERT INTO documents_fts(documentId, title, originalFileName, ocrText, provider, category, tags, protocolNumber) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"

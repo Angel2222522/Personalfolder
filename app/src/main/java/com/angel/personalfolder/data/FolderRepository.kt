@@ -69,10 +69,8 @@ class FolderRepository(private val context: Context) {
                 // application/octet-stream. Use the extension only as a
                 // decoding hint; the PDF renderer/bitmap decoder below still
                 // validates the actual bytes before the Room commit.
-                val mime = reportedMime.takeUnless {
-                    it.isBlank() || it.equals("application/octet-stream", ignoreCase = true)
-                } ?: guessMime(name)
-                require(mime == "application/pdf" || mime.startsWith("image/")) {
+                val mime = ImportTypePolicy.resolveMime(reportedMime, name)
+                require(ImportTypePolicy.isSupported(mime)) {
                     "Ο τύπος αρχείου «$name» δεν υποστηρίζεται."
                 }
                 if (index == 0) {
@@ -132,7 +130,8 @@ class FolderRepository(private val context: Context) {
         provider: String,
         issuedDate: String?,
         expiryDate: String?,
-        protocolNumber: String?
+        protocolNumber: String?,
+        confirmedFields: MetadataFieldConfirmations? = null
     ) {
         DataOperationCoordinator.withExclusive {
             val cleanTitle = title.trim().ifBlank { "Έγγραφο" }
@@ -149,9 +148,26 @@ class FolderRepository(private val context: Context) {
             val issuedChanged = current.issuedDate != cleanIssued
             val expiryChanged = current.expiryDate != cleanExpiry
             val protocolChanged = current.protocolNumber != cleanProtocol
+            val confirmed = confirmedFields?.let { requested ->
+                MetadataFieldChanges(
+                    title = requested.title || titleChanged,
+                    category = requested.category || categoryChanged,
+                    provider = requested.provider || providerChanged,
+                    issuedDate = requested.issuedDate || issuedChanged,
+                    expiryDate = requested.expiryDate || expiryChanged,
+                    protocolNumber = requested.protocolNumber || protocolChanged
+                )
+            } ?: MetadataFieldChanges(
+                titleChanged,
+                categoryChanged,
+                providerChanged,
+                issuedChanged,
+                expiryChanged,
+                protocolChanged
+            )
             val ownership = MetadataOwnershipPolicy.merge(
                 current,
-                MetadataFieldChanges(titleChanged, categoryChanged, providerChanged, issuedChanged, expiryChanged, protocolChanged)
+                confirmed
             )
             database.documentDao().update(
                 current.copy(
@@ -163,14 +179,14 @@ class FolderRepository(private val context: Context) {
                     expiryDate = cleanExpiry,
                     protocolNumber = cleanProtocol,
                     metadataManuallyEdited = current.metadataManuallyEdited || ownership.any,
-                    expiryDateSuggestion = if (expiryChanged) null else current.expiryDateSuggestion,
-                    expiryDateSuggestionConfidence = if (expiryChanged) MetadataConfidence.NONE else current.expiryDateSuggestionConfidence,
-                    titleConfidence = if (titleChanged) MetadataConfidence.MANUAL else current.titleConfidence,
-                    categoryConfidence = if (categoryChanged) MetadataConfidence.MANUAL else current.categoryConfidence,
-                    providerConfidence = if (providerChanged) MetadataConfidence.MANUAL else current.providerConfidence,
-                    issuedDateConfidence = if (issuedChanged) MetadataConfidence.MANUAL else current.issuedDateConfidence,
-                    expiryDateConfidence = if (expiryChanged) MetadataConfidence.MANUAL else current.expiryDateConfidence,
-                    protocolNumberConfidence = if (protocolChanged) MetadataConfidence.MANUAL else current.protocolNumberConfidence,
+                    expiryDateSuggestion = if (confirmed.expiryDate) null else current.expiryDateSuggestion,
+                    expiryDateSuggestionConfidence = if (confirmed.expiryDate) MetadataConfidence.NONE else current.expiryDateSuggestionConfidence,
+                    titleConfidence = if (confirmed.title) MetadataConfidence.MANUAL else current.titleConfidence,
+                    categoryConfidence = if (confirmed.category) MetadataConfidence.MANUAL else current.categoryConfidence,
+                    providerConfidence = if (confirmed.provider) MetadataConfidence.MANUAL else current.providerConfidence,
+                    issuedDateConfidence = if (confirmed.issuedDate) MetadataConfidence.MANUAL else current.issuedDateConfidence,
+                    expiryDateConfidence = if (confirmed.expiryDate) MetadataConfidence.MANUAL else current.expiryDateConfidence,
+                    protocolNumberConfidence = if (confirmed.protocolNumber) MetadataConfidence.MANUAL else current.protocolNumberConfidence,
                     titleManuallyEdited = ownership.title,
                     categoryManuallyEdited = ownership.category,
                     providerManuallyEdited = ownership.provider,
@@ -273,6 +289,9 @@ class FolderRepository(private val context: Context) {
         nextStep: String,
         notes: String
     ) = DataOperationCoordinator.withExclusive {
+        // PF-018 remains a product decision: status changes do not silently
+        // alter reminder semantics until the product specifies whether
+        // COMPLETED cases should retain deadlines/reminders.
         val cleanTitle = title.trim().ifBlank { error("Η υπόθεση χρειάζεται τίτλο.") }
         val cleanStart = startDate.cleanDateOrNull("Η ημερομηνία έναρξης δεν είναι έγκυρη.")
         val cleanDeadline = deadline.cleanDateOrNull("Η προθεσμία δεν είναι έγκυρη.")
@@ -286,6 +305,8 @@ class FolderRepository(private val context: Context) {
     }
 
     suspend fun updateCaseStatus(id: String, status: String) = DataOperationCoordinator.withExclusive {
+        // Keep COMPLETED reminder behavior unchanged until PF-018 is decided;
+        // ARCHIVED is only a display status at present.
         database.caseDao().updateStatus(id, status, System.currentTimeMillis())
         database.timelineDao().insert(
             TimelineEventEntity(
@@ -391,15 +412,6 @@ class FolderRepository(private val context: Context) {
             if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
         }
     }.getOrNull()
-
-    private fun guessMime(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-        "pdf" -> "application/pdf"
-        "jpg", "jpeg" -> "image/jpeg"
-        "png" -> "image/png"
-        "webp" -> "image/webp"
-        "heic", "heif" -> "image/heic"
-        else -> "application/octet-stream"
-    }
 
     private fun String?.cleanDateOrNull(error: String): String? {
         val value = this?.trim().orEmpty()

@@ -94,6 +94,7 @@ import com.angel.personalfolder.data.ChecklistItemEntity
 import com.angel.personalfolder.data.DocumentEntity
 import com.angel.personalfolder.data.DocumentSelectionPolicy
 import com.angel.personalfolder.data.MetadataConfidence
+import com.angel.personalfolder.data.MetadataFieldConfirmations
 import com.angel.personalfolder.data.ProcessingState
 import com.angel.personalfolder.data.ReminderEntity
 import java.time.LocalDate
@@ -443,7 +444,7 @@ private fun DocumentDetailScreen(document: DocumentEntity, viewModel: FolderView
                 Icons.Default.WarningAmber
             )
         }
-        if (document.provider.isNotBlank() || document.protocolNumber != null) item {
+        if (document.provider.isNotBlank() || document.protocolNumber != null || document.issuedDate != null) item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Στοιχεία", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 if (document.provider.isNotBlank()) InfoRow("Φορέας (${confidenceLabel(document.providerConfidence)})", document.provider)
@@ -798,43 +799,120 @@ private fun ChecklistDialog(
 
 @Composable
 private fun DocumentEditDialog(document: DocumentEntity, viewModel: FolderViewModel, onDismiss: () -> Unit) {
-    var title by remember { mutableStateOf(document.title) }
-    var tags by remember { mutableStateOf(document.tags) }
-    var provider by remember { mutableStateOf(document.provider) }
-    var issuedDate by remember { mutableStateOf(document.issuedDate.orEmpty()) }
-    var expiryDate by remember { mutableStateOf(document.expiryDate.orEmpty()) }
-    var protocolNumber by remember { mutableStateOf(document.protocolNumber.orEmpty()) }
-    var category by remember { mutableStateOf(document.category) }
+    var title by remember(document.id, document.updatedAt) { mutableStateOf(document.title) }
+    var tags by remember(document.id, document.updatedAt) { mutableStateOf(document.tags) }
+    var provider by remember(document.id, document.updatedAt) { mutableStateOf(document.provider) }
+    var issuedDate by remember(document.id, document.updatedAt) { mutableStateOf(document.issuedDate.orEmpty()) }
+    var expiryDate by remember(document.id, document.updatedAt) { mutableStateOf(document.expiryDate.orEmpty()) }
+    var protocolNumber by remember(document.id, document.updatedAt) { mutableStateOf(document.protocolNumber.orEmpty()) }
+    var category by remember(document.id, document.updatedAt) { mutableStateOf(document.category) }
+    var titleConfirmed by remember(document.id, document.updatedAt) { mutableStateOf(document.titleManuallyEdited) }
+    var categoryConfirmed by remember(document.id, document.updatedAt) { mutableStateOf(document.categoryManuallyEdited) }
+    var providerConfirmed by remember(document.id, document.updatedAt) { mutableStateOf(document.providerManuallyEdited) }
+    var issuedConfirmed by remember(document.id, document.updatedAt) { mutableStateOf(document.issuedDateManuallyEdited) }
+    var expiryConfirmed by remember(document.id, document.updatedAt) { mutableStateOf(document.expiryDateManuallyEdited) }
+    var protocolConfirmed by remember(document.id, document.updatedAt) { mutableStateOf(document.protocolNumberManuallyEdited) }
     var menu by remember { mutableStateOf(false) }
     val categories = listOf("Ταυτότητα / προσωπικά", "Μετανάστευση / άδειες", "Κατοικία", "Δημόσιες υπηρεσίες", "Εργασία", "Οικονομικά", "Λογαριασμοί", "Υγεία", "Συμβόλαια", "Άλλα")
+    val expirySuggestion = document.expiryDateSuggestion
+        ?: document.expiryDate?.takeUnless { MetadataConfidence.isConfirmed(it, document.expiryDateConfidence, document.expiryDateManuallyEdited) }
+    val expirySuggestionConfidence = document.expiryDateSuggestionConfidence
+        .takeUnless { it == MetadataConfidence.NONE }
+        ?: document.expiryDateConfidence
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Διόρθωση στοιχείων") },
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.heightIn(max = 520.dp)) {
                 item { Text("Οι τιμές OCR είναι προτάσεις. Οι αλλαγές σου διατηρούνται σε επόμενη επεξεργασία.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
-                item { OutlinedTextField(title, { title = it }, label = { Text("Τίτλος") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item {
+                    MetadataTextField("Τίτλος", title, document.titleConfidence, titleConfirmed, { title = it; titleConfirmed = true }, { titleConfirmed = true })
+                }
                 item {
                     Box {
                         OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth()) { Text(category, modifier = Modifier.weight(1f)); Icon(Icons.Default.MoreVert, null) }
-                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) { categories.forEach { option -> DropdownMenuItem(text = { Text(option) }, onClick = { category = option; menu = false }) } }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) { categories.forEach { option -> DropdownMenuItem(text = { Text(option) }, onClick = { category = option; categoryConfirmed = true; menu = false }) } }
                     }
+                    MetadataConfirmationRow("Κατηγορία", document.categoryConfidence, categoryConfirmed) { categoryConfirmed = true }
                 }
                 item { OutlinedTextField(tags, { tags = it }, label = { Text("Ετικέτες (με κόμμα)") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
-                item { OutlinedTextField(provider, { provider = it }, label = { Text("Φορέας") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
-                item { OutlinedTextField(protocolNumber, { protocolNumber = it }, label = { Text("Αριθμός πρωτοκόλλου") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
-                item { OutlinedTextField(issuedDate, { issuedDate = it }, label = { Text("Ημερομηνία έκδοσης (YYYY-MM-DD)") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
-                item { OutlinedTextField(expiryDate, { expiryDate = it }, label = { Text("Ημερομηνία λήξης (YYYY-MM-DD)") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item {
+                    MetadataTextField("Φορέας", provider, document.providerConfidence, providerConfirmed, { provider = it; providerConfirmed = true }, { providerConfirmed = true })
+                }
+                item {
+                    MetadataTextField("Αριθμός πρωτοκόλλου", protocolNumber, document.protocolNumberConfidence, protocolConfirmed, { protocolNumber = it; protocolConfirmed = true }, { protocolConfirmed = true })
+                }
+                item {
+                    MetadataTextField("Ημερομηνία έκδοσης (YYYY-MM-DD)", issuedDate, document.issuedDateConfidence, issuedConfirmed, { issuedDate = it; issuedConfirmed = true }, { issuedConfirmed = true })
+                }
+                item {
+                    MetadataTextField(
+                        label = "Ημερομηνία λήξης (YYYY-MM-DD)",
+                        value = expiryDate,
+                        confidence = expirySuggestionConfidence,
+                        confirmed = expiryConfirmed,
+                        onValueChange = { expiryDate = it; expiryConfirmed = true },
+                        onConfirm = { expiryConfirmed = true },
+                        suggestion = expirySuggestion,
+                        onUseSuggestion = { suggestion -> expiryDate = suggestion; expiryConfirmed = true }
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                viewModel.updateDocument(document.id, title, category, tags, provider, issuedDate.trim().ifBlank { null }, expiryDate.trim().ifBlank { null }, protocolNumber.trim().ifBlank { null })
+                viewModel.updateDocument(
+                    document.id,
+                    title,
+                    category,
+                    tags,
+                    provider,
+                    issuedDate.trim().ifBlank { null },
+                    expiryDate.trim().ifBlank { null },
+                    protocolNumber.trim().ifBlank { null },
+                    MetadataFieldConfirmations(titleConfirmed, categoryConfirmed, providerConfirmed, issuedConfirmed, expiryConfirmed, protocolConfirmed)
+                )
                 onDismiss()
             }) { Text("Αποθήκευση") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Ακύρωση") } }
     )
+}
+
+@Composable
+private fun MetadataTextField(
+    label: String,
+    value: String,
+    confidence: String,
+    confirmed: Boolean,
+    onValueChange: (String) -> Unit,
+    onConfirm: () -> Unit,
+    suggestion: String? = null,
+    onUseSuggestion: ((String) -> Unit)? = null
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        OutlinedTextField(value, onValueChange, label = { Text(label) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        suggestion?.takeIf { value.isBlank() }?.let { candidate ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Πρόταση OCR: $candidate (${confidenceLabel(confidence)})", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                onUseSuggestion?.let { use -> TextButton(onClick = { use(candidate) }) { Text("Χρήση") } }
+            }
+        }
+        MetadataConfirmationRow(label, confidence, confirmed, onConfirm)
+    }
+}
+
+@Composable
+private fun MetadataConfirmationRow(label: String, confidence: String, confirmed: Boolean, onConfirm: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            if (confirmed) "$label: χειροκίνητα επιβεβαιωμένο" else "$label: πρόταση OCR (${confidenceLabel(confidence)})",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+            modifier = Modifier.weight(1f)
+        )
+        if (!confirmed) TextButton(onClick = onConfirm) { Text("Επιβεβαίωση") }
+    }
 }
 
 @Composable

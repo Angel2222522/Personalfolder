@@ -9,6 +9,14 @@ data class MetadataFieldChanges(
     val protocolNumber: Boolean
 )
 
+/**
+ * Explicit per-field confirmation coming from the edit surface.  A field can
+ * be confirmed without changing its text; this is intentionally separate from
+ * value-difference detection so saving an unrelated field cannot confirm OCR
+ * suggestions by accident.
+ */
+typealias MetadataFieldConfirmations = MetadataFieldChanges
+
 data class MetadataFieldOwnership(
     val title: Boolean,
     val category: Boolean,

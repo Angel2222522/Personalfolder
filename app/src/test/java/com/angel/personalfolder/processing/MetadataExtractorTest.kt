@@ -78,6 +78,28 @@ class MetadataExtractorTest {
     }
 
     @Test
+    fun acceptsProtocolLabelVariantsOnlyAtTheStartOfTheirLine() {
+        assertEquals("12345/2026", MetadataExtractor.extract("Αρ Πρωτ: 12345/2026", "Έγγραφο").protocolNumber)
+        assertEquals("ab-7", MetadataExtractor.extract("Protocol No.: AB-7", "Έγγραφο").protocolNumber)
+        assertEquals(null, MetadataExtractor.extract("Σχόλιο: Αριθμός πρωτοκόλλου: 12345", "Έγγραφο").protocolNumber)
+        assertEquals(null, MetadataExtractor.extract("application number: 12345", "Έγγραφο").protocolNumber)
+    }
+
+    @Test
+    fun carriesConfidenceAndProvenanceForProviderAndProtocol() {
+        val result = MetadataExtractor.extract(
+            "Ελληνική Δημοκρατία\nΥπουργείο Παιδείας\nΑρ. Πρωτ.: 12345/2026",
+            "Έγγραφο"
+        )
+        assertEquals("Υπουργείο Παιδείας", result.provider)
+        assertEquals("high", result.providerConfidence)
+        assertEquals("12345/2026", result.protocolNumber)
+        assertEquals("high", result.protocolConfidence)
+        assertTrue(result.json.contains("\"providerProvenance\":\"issuer-marker:"))
+        assertTrue(result.json.contains("\"protocolProvenance\":\"protocol-label\""))
+    }
+
+    @Test
     fun prefersSpecificIssuingAuthorityOverGenericStateHeading() {
         val result = MetadataExtractor.extract(
             "Ελληνική Δημοκρατία\nΥπουργείο Παιδείας\nΔιεύθυνση Διοικητικού",

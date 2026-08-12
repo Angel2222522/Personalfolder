@@ -17,4 +17,14 @@ class PendingActivityStateStoreTest {
         assertEquals("correct horse battery", PendingActivityStateStore.consumePassword(context))
         assertNull(PendingActivityStateStore.consumePassword(context))
     }
+
+    @Test
+    fun pickerListsSurviveProcessRecreationAndAreConsumedOnce() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        PendingActivityStateStore.clearList(context, "export_ids")
+        PendingActivityStateStore.saveList(context, "export_ids", listOf("doc-1", "doc-2"))
+        assertEquals(listOf("doc-1", "doc-2"), PendingActivityStateStore.peekList(context, "export_ids"))
+        assertEquals(listOf("doc-1", "doc-2"), PendingActivityStateStore.consumeList(context, "export_ids"))
+        assertEquals(emptyList<String>(), PendingActivityStateStore.consumeList(context, "export_ids"))
+    }
 }

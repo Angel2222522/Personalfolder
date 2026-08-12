@@ -32,6 +32,14 @@ class RestoreRecoveryPolicyTest {
     }
 
     @Test
+    fun filesInstalledMatchingGenerationCanBeFinalizedAfterJournalWriteFailure() {
+        val action = RestoreRecoveryPolicy.decide(
+            RestoreRecoveryState("files_installed", ids, ids, true, true, false, true, true)
+        )
+        assertEquals(RestoreRecoveryAction.FINALIZE_NEW_GENERATION, action)
+    }
+
+    @Test
     fun filesInstalledWithPreviousGenerationRollsBackWhenDatabaseDidNotCommit() {
         val action = RestoreRecoveryPolicy.decide(
             RestoreRecoveryState("files_installed", setOf("old"), ids, true, true, true, false, false)

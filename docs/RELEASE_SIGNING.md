@@ -11,14 +11,15 @@ This fingerprint is public and is intentionally committed to the repository. The
 
 ## Required GitHub Actions secrets
 
-The repository workflow continues to use the existing four secrets for every normal release from `main`:
+The repository workflow uses the existing four secrets for every normal release from `main`, through the
+version-controlled `scripts/prepare-signing.sh` helper:
 
 - `PERSONAL_FOLDER_KEYSTORE_BASE64`
 - `PERSONAL_FOLDER_KEYSTORE_PASSWORD`
 - `PERSONAL_FOLDER_KEY_ALIAS`
 - `PERSONAL_FOLDER_KEY_PASSWORD`
 
-The keystore is expanded only inside the ephemeral runner and the certificate fingerprint is verified before building/uploading.
+The keystore is expanded only inside the ephemeral runner and the certificate fingerprint is verified before building/uploading. The helper is the workflow's single signing setup implementation; it writes only the ephemeral Gradle environment variables and never commits signing material.
 
 If any secret is missing, or if the supplied keystore certificate does not match the permanent SHA-256 fingerprint, the workflow must refuse to create/upload a normal release APK.
 

@@ -19,4 +19,19 @@ class MetadataOwnershipPolicyTest {
         assertFalse(ownership.expiryDate)
         assertFalse(ownership.protocolNumber)
     }
+
+    @Test
+    fun explicitConfirmationCanClaimOneUnchangedFieldOnly() {
+        val document = DocumentEntity("id", "OCR title", "file.pdf", "application/pdf", "/private/doc.pf", 1, createdAt = 1, updatedAt = 1)
+        val ownership = MetadataOwnershipPolicy.merge(
+            document,
+            MetadataFieldConfirmations(title = false, category = false, provider = false, issuedDate = false, expiryDate = true, protocolNumber = false)
+        )
+        assertFalse(ownership.title)
+        assertFalse(ownership.category)
+        assertFalse(ownership.provider)
+        assertFalse(ownership.issuedDate)
+        assertTrue(ownership.expiryDate)
+        assertFalse(ownership.protocolNumber)
+    }
 }

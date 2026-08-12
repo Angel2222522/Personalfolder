@@ -15,7 +15,11 @@ object PendingActivityStateStore {
     private const val PREFS = "pending_activity_state"
     private const val PASSWORD = "encrypted_password"
     private const val CREATED_AT = "created_at"
+    private const val LIST_PREFIX = "encrypted_list_"
+    private const val LIST_CREATED_AT_PREFIX = "list_created_at_"
     private const val MAX_AGE_MS = 15 * 60 * 1000L
+    private const val MAX_LIST_ITEMS = 100
+    private const val MAX_LIST_ITEM_LENGTH = 512
 
     fun savePassword(context: Context, password: String) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
@@ -59,6 +63,64 @@ object PendingActivityStateStore {
     fun clear(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .remove(PASSWORD).remove(CREATED_AT).apply()
+    }
+
+    /**
+     * Stores picker state encrypted and with the same short lifetime as the
+     * backup password. This covers process death while a SAF picker is open;
+     * document bytes are never placed in the preferences.
+     */
+    fun saveList(context: Context, stateKey: String, values: List<String>) {
+        require(stateKey.matches(Regex("[a-z_]{1,32}"))) { "Μη έγκυρο κλειδί προσωρινής κατάστασης." }
+        val bounded = values.distinct().take(MAX_LIST_ITEMS).onEach {
+            require(it.length <= MAX_LIST_ITEM_LENGTH && !it.contains('\u0000')) { "Η προσωρινή κατάσταση είναι υπερβολικά μεγάλη." }
+        }
+        val payload = encryptPayload(bounded.joinToString("\u0000"))
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(LIST_PREFIX + stateKey, payload)
+            .putLong(LIST_CREATED_AT_PREFIX + stateKey, System.currentTimeMillis())
+            .apply()
+    }
+
+    fun peekList(context: Context, stateKey: String): List<String> = readList(context, stateKey, consume = false)
+
+    fun consumeList(context: Context, stateKey: String): List<String> = readList(context, stateKey, consume = true)
+
+    fun clearList(context: Context, stateKey: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .remove(LIST_PREFIX + stateKey)
+            .remove(LIST_CREATED_AT_PREFIX + stateKey)
+            .apply()
+    }
+
+    private fun readList(context: Context, stateKey: String, consume: Boolean): List<String> {
+        val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val createdAt = preferences.getLong(LIST_CREATED_AT_PREFIX + stateKey, 0L)
+        val encoded = preferences.getString(LIST_PREFIX + stateKey, null)
+        if (encoded == null || createdAt <= 0L || System.currentTimeMillis() - createdAt > MAX_AGE_MS) {
+            clearList(context, stateKey)
+            return emptyList()
+        }
+        return runCatching {
+            decryptPayload(encoded).split('\u0000').filter(String::isNotEmpty).take(MAX_LIST_ITEMS)
+        }.getOrElse { emptyList() }.also {
+            if (consume) clearList(context, stateKey)
+        }
+    }
+
+    private fun encryptPayload(value: String): String {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
+        val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+        return Base64.encodeToString(cipher.iv + encrypted, Base64.NO_WRAP)
+    }
+
+    private fun decryptPayload(encoded: String): String {
+        val payload = Base64.decode(encoded, Base64.DEFAULT)
+        require(payload.size > 12) { "Μη έγκυρη προσωρινή κατάσταση." }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+            init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, payload.copyOfRange(0, 12)))
+        }
+        return String(cipher.doFinal(payload.copyOfRange(12, payload.size)), Charsets.UTF_8)
     }
 
     private fun key(): SecretKey {

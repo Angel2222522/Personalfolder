@@ -35,17 +35,4 @@ object TempFileCleaner {
         // possible after process death.
     }
 
-    fun scheduleDeletion(file: File, delayMs: Long = MAX_TEMP_AGE_MS) {
-        file.parentFile?.mkdirs()
-        val thread = Thread {
-            try {
-                Thread.sleep(delayMs)
-                FileCrypto.deleteRecursively(file)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-            }
-        }
-        thread.isDaemon = true
-        thread.start()
-    }
 }

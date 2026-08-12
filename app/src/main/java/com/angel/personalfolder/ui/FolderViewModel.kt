@@ -11,6 +11,7 @@ import com.angel.personalfolder.data.DocumentEntity
 import com.angel.personalfolder.data.BackupService
 import com.angel.personalfolder.data.ExportService
 import com.angel.personalfolder.data.FolderRepository
+import com.angel.personalfolder.data.MetadataFieldConfirmations
 import com.angel.personalfolder.data.TimelineEventEntity
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,8 +72,8 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
 
     suspend fun getDocument(id: String): DocumentEntity? = repository.document(id)
 
-    fun updateDocument(id: String, title: String, category: String, tags: String, provider: String, issuedDate: String?, expiryDate: String?, protocolNumber: String?) = viewModelScope.launch {
-        runCatching { repository.updateDocumentMetadata(id, title, category, tags, provider, issuedDate, expiryDate, protocolNumber) }
+    fun updateDocument(id: String, title: String, category: String, tags: String, provider: String, issuedDate: String?, expiryDate: String?, protocolNumber: String?, confirmedFields: MetadataFieldConfirmations? = null) = viewModelScope.launch {
+        runCatching { repository.updateDocumentMetadata(id, title, category, tags, provider, issuedDate, expiryDate, protocolNumber, confirmedFields) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αποθήκευση.") }
     }
 

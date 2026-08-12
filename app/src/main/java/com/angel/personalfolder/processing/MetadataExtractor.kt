@@ -33,7 +33,8 @@ data class ExtractedMetadata(
 object MetadataExtractor {
     private val dateRegex = Regex("""(?<!\d)(\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})(?!\d)""")
     private val protocolRegex = Regex(
-        """(?:αριθμος\s+πρωτοκολλου|αρ\.?\s*πρωτ(?:οκολλου)?\.?|protocol(?:\s*(?:no|number))?)\s*[:#№-]?\s*([a-zα-ω0-9][a-zα-ω0-9./_-]{1,119})"""
+        """^\s*(?:αριθμος[ \t]+πρωτοκολλου|αρ[ \t]*\.?[ \t]*πρωτ(?:οκολλου)?[ \t]*\.?|protocol(?:[ \t]+(?:no|number)[ \t]*\.?)?)[ \t]*[:#№-]?[ \t]*([a-zα-ω0-9][a-zα-ω0-9./_-]{1,119})(?=[ \t]|$)""",
+        setOf(RegexOption.MULTILINE)
     )
 
     private val categoryRules = listOf(

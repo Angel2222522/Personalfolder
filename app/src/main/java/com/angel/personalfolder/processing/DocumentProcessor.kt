@@ -11,7 +11,6 @@ import com.angel.personalfolder.data.AppDatabase
 import com.angel.personalfolder.data.DataOperationCoordinator
 import com.angel.personalfolder.data.DocumentEntity
 import com.angel.personalfolder.data.DocumentPageEntity
-import com.angel.personalfolder.data.MetadataConfidence
 import com.angel.personalfolder.data.PdfBitmapRenderer
 import com.angel.personalfolder.data.ProcessingState
 import com.angel.personalfolder.data.ReminderScheduler
@@ -71,29 +70,14 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                 database.documentDao().update(latest.copy(processingState = ProcessingState.FAILED, processingError = message, updatedAt = System.currentTimeMillis()))
                 return@withContext Result.failure(IllegalStateException(message))
             }
-            val expiryIsAuthoritative = MetadataConfidence.isAuthoritative(metadata.expiryConfidence)
-            val issuedIsAuthoritative = MetadataConfidence.isAuthoritative(metadata.issuedConfidence)
-            val protocolIsAuthoritative = MetadataConfidence.isAuthoritative(metadata.protocolConfidence)
-            val updated = latest.copy(
-                title = if (latest.titleManuallyEdited) latest.title else metadata.title,
-                category = if (latest.categoryManuallyEdited) latest.category else metadata.category,
+            // Keep low-confidence candidates in their fields together with
+            // confidence/provenance. They remain visibly unconfirmed and
+            // cannot create reminders, but can be confirmed per field later.
+            val updated = MetadataApplicationPolicy.apply(latest, metadata).copy(
                 ocrText = fullText,
-                provider = if (latest.providerManuallyEdited) latest.provider else metadata.provider.takeIf { MetadataConfidence.isAuthoritative(metadata.providerConfidence) }.orEmpty(),
-                issuedDate = if (latest.issuedDateManuallyEdited) latest.issuedDate else metadata.issuedDate.takeIf { issuedIsAuthoritative },
-                expiryDate = if (latest.expiryDateManuallyEdited) latest.expiryDate else metadata.expiryDate.takeIf { expiryIsAuthoritative },
-                protocolNumber = if (latest.protocolNumberManuallyEdited) latest.protocolNumber else metadata.protocolNumber.takeIf { protocolIsAuthoritative },
                 extractedMetadataJson = metadata.json,
                 processingState = ProcessingState.PROCESSED,
                 processingError = null,
-                expiryDateSuggestion = if (latest.expiryDateManuallyEdited || expiryIsAuthoritative) null else metadata.expiryDate,
-                expiryDateSuggestionConfidence = if (latest.expiryDateManuallyEdited || expiryIsAuthoritative) MetadataConfidence.NONE else metadata.expiryConfidence,
-                titleConfidence = if (latest.titleManuallyEdited) MetadataConfidence.MANUAL else metadata.titleConfidence,
-                categoryConfidence = if (latest.categoryManuallyEdited) MetadataConfidence.MANUAL else metadata.categoryConfidence,
-                providerConfidence = if (latest.providerManuallyEdited) MetadataConfidence.MANUAL else metadata.providerConfidence,
-                issuedDateConfidence = if (latest.issuedDateManuallyEdited) MetadataConfidence.MANUAL else metadata.issuedConfidence,
-                expiryDateConfidence = if (latest.expiryDateManuallyEdited) MetadataConfidence.MANUAL else metadata.expiryConfidence,
-                protocolNumberConfidence = if (latest.protocolNumberManuallyEdited) MetadataConfidence.MANUAL else metadata.protocolConfidence,
-                metadataManuallyEdited = latest.titleManuallyEdited || latest.categoryManuallyEdited || latest.providerManuallyEdited || latest.issuedDateManuallyEdited || latest.expiryDateManuallyEdited || latest.protocolNumberManuallyEdited,
                 updatedAt = System.currentTimeMillis()
             )
             database.documentDao().update(updated)
