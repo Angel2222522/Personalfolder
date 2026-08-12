@@ -208,7 +208,9 @@ object MetadataExtractor {
 
     private fun isValidProtocol(value: String): Boolean {
         val clean = value.trim('.', ':', '#', '-', '_', '/')
-        return clean.length >= 3 && clean.any(Char::isDigit) && clean.all { it.isLetterOrDigit() || it in ".\/_-" }
+        return clean.length >= 3 && clean.any(Char::isDigit) && clean.all {
+            it.isLetterOrDigit() || it == '.' || it == '/' || it == '_' || it == '-'
+        }
     }
 
     private fun contextAround(text: String, range: IntRange): String = text.substring(
