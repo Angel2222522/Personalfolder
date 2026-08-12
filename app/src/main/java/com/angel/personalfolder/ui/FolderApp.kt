@@ -563,7 +563,7 @@ private fun SettingsScreen(lockEnabled: Boolean, onEnableLock: () -> Unit, onDis
                 }
             }
         }
-        item { Text("Έκδοση 2.0.0 · Ελληνικό περιβάλλον · Λειτουργία χωρίς σύνδεση", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) }
+        item { Text("Έκδοση 2.0.1 · Ελληνικό περιβάλλον · Λειτουργία χωρίς σύνδεση", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) }
     }
 }
 

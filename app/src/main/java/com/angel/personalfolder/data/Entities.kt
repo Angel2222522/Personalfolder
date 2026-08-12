@@ -29,6 +29,7 @@ data class DocumentEntity(
     val processingState: String = ProcessingState.QUEUED,
     val processingError: String? = null,
     @ColumnInfo(defaultValue = "0") val metadataManuallyEdited: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val expiryDateManuallyEdited: Boolean = false,
     val createdAt: Long,
     val updatedAt: Long
 )

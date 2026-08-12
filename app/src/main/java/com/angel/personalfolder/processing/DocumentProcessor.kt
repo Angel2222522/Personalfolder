@@ -106,6 +106,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
 
             if (fullText.isBlank()) {
                 val message = "Το OCR ολοκληρώθηκε χωρίς αναγνωρίσιμο κείμενο."
+                val finalExpiry = MetadataMerge.expiryWhenOcrHasNoText(latest)
                 database.withTransaction {
                     pageResults.forEach { result ->
                         database.documentPageDao().updateOcr(document.id, result.pageIndex, result.text)
@@ -116,7 +117,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                         ocrText = latest.ocrText,
                         provider = latest.provider,
                         issuedDate = latest.issuedDate,
-                        expiryDate = latest.expiryDate,
+                        expiryDate = finalExpiry,
                         protocolNumber = latest.protocolNumber,
                         metadataJson = latest.extractedMetadataJson,
                         state = ProcessingState.FAILED,
@@ -124,16 +125,14 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                         updatedAt = System.currentTimeMillis()
                     )
                 }
+                ReminderScheduler.replaceForDocument(context, document.id, latest.title, finalExpiry)
                 return@withContext Result.failure(IllegalStateException(message))
             }
 
-            val finalExpiry = if (keepManualMetadata) {
-                latest.expiryDate
-            } else if (metadata.expiryConfidence == "high" || metadata.expiryConfidence == "medium") {
-                metadata.expiryDate
-            } else {
-                null
-            }
+            // This is the single value used by both the Room update and the
+            // reminder scheduler. An unsafe suggestion is therefore never
+            // stored under one value while being checked under another.
+            val finalExpiry = MetadataMerge.expiryForOcr(latest, metadata)
             database.withTransaction {
                 pageResults.forEach { result ->
                     database.documentPageDao().updateOcr(document.id, result.pageIndex, result.text)
@@ -144,7 +143,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                     ocrText = fullText,
                     provider = if (keepManualMetadata) latest.provider else metadata.provider,
                     issuedDate = if (keepManualMetadata) latest.issuedDate else metadata.issuedDate,
-                    expiryDate = if (keepManualMetadata) latest.expiryDate else metadata.expiryDate,
+                    expiryDate = finalExpiry,
                     protocolNumber = if (keepManualMetadata) latest.protocolNumber else metadata.protocolNumber,
                     metadataJson = metadata.json,
                     state = ProcessingState.PROCESSED,

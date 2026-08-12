@@ -58,7 +58,8 @@ interface DocumentDao {
     @Query("""
         UPDATE documents SET title = :title, category = :category, tags = :tags,
         provider = :provider, issuedDate = :issuedDate, expiryDate = :expiryDate,
-        protocolNumber = :protocolNumber, metadataManuallyEdited = 1, updatedAt = :updatedAt
+        protocolNumber = :protocolNumber, metadataManuallyEdited = 1,
+        expiryDateManuallyEdited = :expiryDateManuallyEdited, updatedAt = :updatedAt
         WHERE id = :id
     """)
     suspend fun updateMetadata(
@@ -70,6 +71,7 @@ interface DocumentDao {
         issuedDate: String?,
         expiryDate: String?,
         protocolNumber: String?,
+        expiryDateManuallyEdited: Boolean,
         updatedAt: Long
     )
 

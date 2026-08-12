@@ -137,8 +137,10 @@ class FolderRepository(private val context: Context) {
         expiryDate: String?,
         protocolNumber: String?
     ) {
+        val existing = database.documentDao().getById(id) ?: error("Το έγγραφο δεν βρέθηκε.")
         val cleanExpiry = expiryDate.cleanDateOrNull("Η ημερομηνία λήξης δεν είναι έγκυρη.")
         val cleanIssued = issuedDate.cleanDateOrNull("Η ημερομηνία έκδοσης δεν είναι έγκυρη.")
+        val expiryWasChanged = cleanExpiry != existing.expiryDate
         database.documentDao().updateMetadata(
             id = id,
             title = title.trim().ifBlank { "Έγγραφο" },
@@ -148,6 +150,7 @@ class FolderRepository(private val context: Context) {
             issuedDate = cleanIssued,
             expiryDate = cleanExpiry,
             protocolNumber = protocolNumber?.trim()?.ifBlank { null },
+            expiryDateManuallyEdited = existing.expiryDateManuallyEdited || expiryWasChanged,
             updatedAt = System.currentTimeMillis()
         )
         ReminderScheduler.replaceForDocument(context, id, title.trim().ifBlank { "Έγγραφο" }, cleanExpiry)

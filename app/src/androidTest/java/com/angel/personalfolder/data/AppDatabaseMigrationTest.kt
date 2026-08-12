@@ -32,9 +32,14 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
-    fun migratesV1ToV4WithoutLosingRowsOrRelations() = runBlocking {
+    fun migratesV1ToV5WithoutLosingRowsOrRelations() = runBlocking {
         val database = Room.databaseBuilder(context, AppDatabase::class.java, databaseName)
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
+            .addMigrations(
+                AppDatabase.MIGRATION_1_2,
+                AppDatabase.MIGRATION_2_3,
+                AppDatabase.MIGRATION_3_4,
+                AppDatabase.MIGRATION_4_5
+            )
             .build()
         try {
             assertNotNull(database.documentDao().getById("doc-1"))
@@ -43,6 +48,7 @@ class AppDatabaseMigrationTest {
             assertEquals(1, database.timelineDao().getAll().size)
             assertEquals(1, database.checklistDao().getAll().size)
             assertEquals(1, database.reminderDao().getAll().size)
+            assertEquals(false, database.documentDao().getById("doc-1")?.expiryDateManuallyEdited)
             val checklistIndexes = database.openHelper.readableDatabase
                 .query("PRAGMA index_list('checklist_items')")
                 .use { cursor ->

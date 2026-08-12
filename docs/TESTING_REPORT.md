@@ -6,14 +6,17 @@
 - Controlled fixtures were OCR'd: Greek image, Greek/English image, low-quality image, and a two-page PDF rendered to bounded 2400-pixel pages.
 - The SQLite FTS trigger/normalization rule was exercised with uppercase Greek, tonos and accentless prefix queries.
 - `git diff --check` completed without whitespace errors.
+- The new metadata unit tests cover explicit expiry labels, unrelated/rejection/decision dates, composite date ranges, specific provider selection, protocol OCR variants, and conservative null behavior.
 
 The host checks do not replace Android execution. The current checkout has no Gradle wrapper, system Gradle, Android SDK, `adb`, emulator or attached device, so the local Android build and instrumentation tests could not be run here.
 
 ## Android tests added but not executed in this environment
 
-- `AppDatabaseMigrationTest`: V1→V4 relations, cascade/SET NULL behavior and the `linkedDocumentId` index.
+- `AppDatabaseMigrationTest`: V1→V5 relations, cascade/SET NULL behavior, the `linkedDocumentId` index and the new expiry-manual flag.
 - `OcrWorkerIntegrationTest`: encrypted Greek image, multi-page PDF rendering, persisted page/document OCR, normalized FTS search and unreadable-input failure state.
+- `MetadataPersistenceTest`: the safe expiry value is the value persisted in `DocumentEntity`.
 - `DocumentFileFormatTest` and `SearchTextTest`: pure JVM checks for PDF signature detection and Greek normalization.
+- `MetadataExtractorTest` and `MetadataMergeTest`: the new conservative metadata rules and legacy/manual expiry behavior.
 - Existing `BackupRoundTripTest`: portable backup, wrong password and corrupted archive behavior.
 
 ## External CI artifact audit
