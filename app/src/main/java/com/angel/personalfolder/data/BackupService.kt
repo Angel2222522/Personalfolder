@@ -169,7 +169,7 @@ class BackupService(private val context: Context) {
                         else staged.outputStream().use { input.copyLimitedTo(it, MAX_BACKUP_BYTES) }
                         stagedFiles[name] = staged
                     } else if (!entry.isDirectory) {
-                        input.discardLimited(MAX_BACKUP_BYTES)
+                        input.copyLimitedTo(NullOutputStream, MAX_BACKUP_BYTES)
                     }
                     input.closeEntry()
                     entry = input.nextEntry
