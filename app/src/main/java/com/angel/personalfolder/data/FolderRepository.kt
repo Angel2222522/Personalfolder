@@ -4,17 +4,14 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.room.withTransaction
-import androidx.work.ExistingWorkPolicy
-import androidx.work.BackoffPolicy
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
-import androidx.work.workDataOf
 import com.angel.personalfolder.security.FileCrypto
 import com.angel.personalfolder.workers.OcrWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.time.LocalDate
 import java.util.UUID
@@ -63,8 +60,12 @@ class FolderRepository(private val context: Context) {
         return@withContext try {
             distinctUris.forEachIndexed { index, uri ->
                 val name = safeDisplayName(uri) ?: "σελίδα_${index + 1}"
-                val mime = context.contentResolver.getType(uri).orEmpty().ifBlank { guessMime(name) }
-                require(mime == "application/pdf" || mime.startsWith("image/")) {
+                val mime = context.contentResolver.getType(uri).orEmpty()
+                    .substringBefore(';')
+                    .trim()
+                    .ifBlank { guessMime(name) }
+                val extension = name.substringAfterLast('.', "").lowercase()
+                require(mime == "application/pdf" || mime.startsWith("image/") || mime == "application/octet-stream" || extension in SUPPORTED_EXTENSIONS) {
                     "Ο τύπος αρχείου «$name» δεν υποστηρίζεται."
                 }
                 if (index == 0) {
@@ -106,7 +107,19 @@ class FolderRepository(private val context: Context) {
                 )
                 database.documentPageDao().insertAll(pages)
             }
-            enqueueOcr(id)
+            try {
+                enqueueOcr(id)
+            } catch (enqueueError: Throwable) {
+                // The database transaction above has already committed. If
+                // WorkManager cannot accept the job, remove that row as well
+                // so a visible document never points at orphaned files.
+                WorkManager.getInstance(context).cancelUniqueWork("ocr_$id")
+                database.withTransaction {
+                    database.documentPageDao().deleteForDocument(id)
+                    database.documentDao().deleteById(id)
+                }
+                throw enqueueError
+            }
             id
         } catch (error: Throwable) {
             FileCrypto.deleteRecursively(documentDirectory)
@@ -142,12 +155,19 @@ class FolderRepository(private val context: Context) {
 
     suspend fun retryOcr(id: String) {
         require(database.documentDao().getById(id) != null) { "Το έγγραφο δεν βρέθηκε." }
+        database.documentDao().updateProcessingState(
+            id = id,
+            state = ProcessingState.QUEUED,
+            error = null,
+            updatedAt = System.currentTimeMillis()
+        )
         enqueueOcr(id)
     }
 
     suspend fun deleteDocument(id: String) {
         database.documentDao().getById(id)
         WorkManager.getInstance(context).cancelUniqueWork("ocr_$id")
+        withTimeoutOrNull(15_000) { OcrWorker.awaitIdle() }
         ReminderScheduler.removeForDocument(context, id)
         database.withTransaction {
             database.caseDocumentDao().deleteForDocument(id)
@@ -211,6 +231,10 @@ class FolderRepository(private val context: Context) {
     }
 
     suspend fun updateCaseStatus(id: String, status: String) {
+        require(database.caseDao().getById(id) != null) { "Η υπόθεση δεν βρέθηκε." }
+        require(status in setOf(CaseStatus.NEW, CaseStatus.IN_PROGRESS, CaseStatus.WAITING, CaseStatus.ACTION, CaseStatus.COMPLETED, CaseStatus.ARCHIVED)) {
+            "Η κατάσταση της υπόθεσης δεν είναι έγκυρη."
+        }
         database.caseDao().updateStatus(id, status, System.currentTimeMillis())
         database.timelineDao().insert(
             TimelineEventEntity(
@@ -254,19 +278,15 @@ class FolderRepository(private val context: Context) {
     suspend fun markReminderDone(id: String) = database.reminderDao().markDone(id)
 
     private suspend fun enqueueOcr(id: String) {
-        val request = OneTimeWorkRequestBuilder<OcrWorker>()
-            .setInputData(workDataOf(OcrWorker.KEY_DOCUMENT_ID to id))
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, java.util.concurrent.TimeUnit.SECONDS)
-            .addTag("document-processing")
-            .build()
-        WorkManager.getInstance(context).enqueueUniqueWork("ocr_$id", ExistingWorkPolicy.REPLACE, request)
+        OcrWorker.enqueue(context, id)
     }
 
     private fun countEncryptedSourcePages(encrypted: File, mime: String, name: String): Int {
-        if (!mime.equals("application/pdf", true) && !name.endsWith(".pdf", true)) return 1
         val temp = File(context.cacheDir, "ocr/import_${UUID.randomUUID()}.pdf").apply { parentFile?.mkdirs() }
         return try {
             FileCrypto.decryptToTemp(encrypted, temp)
+            require(DocumentFileFormat.isSupported(temp, mime, name, mime)) { "Το αρχείο «$name» δεν είναι έγκυρη εικόνα ή PDF." }
+            if (!DocumentFileFormat.isPdf(temp, mime, name, mime)) return 1
             ParcelFileDescriptor.open(temp, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
                 PdfRenderer(descriptor).use { it.pageCount.coerceAtLeast(1).also { count -> require(count <= MAX_LOGICAL_PAGES) { "Το PDF περιέχει υπερβολικά πολλές σελίδες." } } }
             }
@@ -294,6 +314,9 @@ class FolderRepository(private val context: Context) {
         "png" -> "image/png"
         "webp" -> "image/webp"
         "heic", "heif" -> "image/heic"
+        "gif" -> "image/gif"
+        "bmp" -> "image/bmp"
+        "tif", "tiff" -> "image/tiff"
         else -> "application/octet-stream"
     }
 
@@ -303,7 +326,7 @@ class FolderRepository(private val context: Context) {
         return runCatching { LocalDate.parse(value).toString() }.getOrElse { throw IllegalArgumentException(error) }
     }
 
-    private fun toFtsQuery(value: String): String = value.trim().split(Regex("\\s+"))
+    private fun toFtsQuery(value: String): String = SearchText.normalize(value).split(Regex("\\s+"))
         .map { it.replace(Regex("[^\\p{L}\\p{N}_-]"), "") }
         .filter { it.isNotBlank() }
         .joinToString(" AND ") { "\"$it\"*" }
@@ -323,5 +346,6 @@ class FolderRepository(private val context: Context) {
         const val MAX_TOTAL_STORAGE_BYTES = 2L * 1024 * 1024 * 1024
         const val MAX_DOCUMENTS = 5_000
         const val MAX_LOGICAL_PAGES = 1_000
+        val SUPPORTED_EXTENSIONS = setOf("pdf", "jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "bmp", "tif", "tiff")
     }
 }

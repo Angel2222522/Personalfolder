@@ -9,6 +9,7 @@ import com.angel.personalfolder.data.AppDatabase
 import com.angel.personalfolder.data.BackupService
 import com.angel.personalfolder.data.ReminderScheduler
 import com.angel.personalfolder.security.TempFileCleaner
+import com.angel.personalfolder.workers.OcrRecovery
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -26,6 +27,7 @@ class PersonalFolderApp : Application() {
                 android.util.Log.w("PersonalFolder", "Restore recovery was not completed: ${error::class.java.simpleName}")
             }
             TempFileCleaner.recover(this@PersonalFolderApp)
+            OcrRecovery.recover(this@PersonalFolderApp)
             ReminderScheduler.rescheduleAll(this@PersonalFolderApp)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

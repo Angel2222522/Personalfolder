@@ -46,6 +46,9 @@ interface DocumentDao {
     @Query("SELECT * FROM documents")
     suspend fun getAll(): List<DocumentEntity>
 
+    @Query("SELECT * FROM documents WHERE processingState = :state")
+    suspend fun getByProcessingState(state: String): List<DocumentEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(document: DocumentEntity)
 
@@ -84,6 +87,40 @@ interface DocumentDao {
         error: String?,
         updatedAt: Long
     )
+
+    @Query("UPDATE documents SET processingState = :state, processingError = :error, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateProcessingState(id: String, state: String, error: String?, updatedAt: Long)
+
+    @Query("UPDATE documents SET processingState = :state, processingError = :error, updatedAt = :updatedAt WHERE id = :id AND processingState = :expectedState")
+    suspend fun updateProcessingStateIfCurrent(
+        id: String,
+        expectedState: String,
+        state: String,
+        error: String?,
+        updatedAt: Long
+    ): Int
+
+    @Query("""
+        UPDATE documents SET category = :category, ocrText = :ocrText, provider = :provider,
+        issuedDate = :issuedDate, expiryDate = :expiryDate, protocolNumber = :protocolNumber,
+        extractedMetadataJson = :metadataJson, processingState = :state, processingError = :error,
+        updatedAt = :updatedAt
+        WHERE id = :id AND processingState = :expectedState
+    """)
+    suspend fun updateProcessingIfCurrent(
+        id: String,
+        expectedState: String,
+        category: String,
+        ocrText: String,
+        provider: String,
+        issuedDate: String?,
+        expiryDate: String?,
+        protocolNumber: String?,
+        metadataJson: String,
+        state: String,
+        error: String?,
+        updatedAt: Long
+    ): Int
 
     @Query("DELETE FROM documents WHERE id = :id")
     suspend fun deleteById(id: String)

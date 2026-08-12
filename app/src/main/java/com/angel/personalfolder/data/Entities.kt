@@ -2,6 +2,7 @@ package com.angel.personalfolder.data
 
 import androidx.room.Entity
 import androidx.room.Fts4
+import androidx.room.FtsOptions
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.ColumnInfo
@@ -37,7 +38,7 @@ data class DocumentEntity(
  * the database triggers in [AppDatabase] so writes remain atomic with the
  * document row while Room can validate and migrate FTS queries safely.
  */
-@Fts4
+@Fts4(tokenizer = FtsOptions.TOKENIZER_UNICODE61)
 @Entity(tableName = "documents_fts")
 data class DocumentFtsEntity(
     val documentId: String,
