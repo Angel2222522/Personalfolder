@@ -36,7 +36,7 @@ class MetadataExtractorTest {
     }
 
     @Test
-    fun scoresDateContextUsingOriginalTextPositions() {
+    fun scoresDateContextUsingExplicitKeywords() {
         val result = MetadataExtractor.extract(
             "Ημερομηνία έκδοσης: 01/02/2024\nΤο έγγραφο ισχύει έως: 15-03-2025",
             "Έγγραφο"
@@ -48,17 +48,17 @@ class MetadataExtractorTest {
     }
 
     @Test
-    fun doesNotInventExpiryFromOneUnlabelledDate() {
+    fun doesNotInventCreationOrExpiryFromUnlabelledDate() {
         val result = MetadataExtractor.extract("Αριθμός αίτησης 12345\n03/08/2026", "Έγγραφο")
+        assertEquals(null, result.issuedDate)
         assertEquals(null, result.expiryDate)
-        assertEquals("2026-08-03", result.issuedDate)
-        assertEquals("low", result.issuedConfidence)
-        assertTrue(result.json.contains("\"expiryConfidence\":\"none\""))
+        assertEquals("none", result.issuedConfidence)
+        assertEquals("none", result.expiryConfidence)
     }
 
     @Test
     fun doesNotInventExpiryFromASecondUnlabelledDate() {
-        val result = MetadataExtractor.extract("Εκδόθηκε 01/01/2024\nΑναφορά 02/02/2025", "Έγγραφο")
+        val result = MetadataExtractor.extract("Δημιουργία: 01/01/2024\nΑναφορά 02/02/2025", "Έγγραφο")
         assertEquals("2024-01-01", result.issuedDate)
         assertEquals(null, result.expiryDate)
         assertEquals("none", result.expiryConfidence)
@@ -66,9 +66,9 @@ class MetadataExtractorTest {
     }
 
     @Test
-    fun doesNotReuseIssuedDateAsExpiryWhenValidityWordsAreNearby() {
+    fun genericValidityWordsDoNotTurnCreationIntoExpiry() {
         val result = MetadataExtractor.extract(
-            "Ημερομηνία έκδοσης: 03/08/2026\nΗ παρούσα βεβαίωση ισχύει για κάθε νόμιμη χρήση.",
+            "Ημερομηνία δημιουργίας: 03/08/2026\nΗ παρούσα βεβαίωση ισχύει για κάθε νόμιμη χρήση.",
             "Έγγραφο"
         )
         assertEquals("2026-08-03", result.issuedDate)
@@ -77,14 +77,43 @@ class MetadataExtractorTest {
     }
 
     @Test
-    fun recognizesCreationDateWithoutInventingExpiry() {
+    fun creationKeywordStillWinsWhenOtherKeywordsExistOnTheSameLine() {
         val result = MetadataExtractor.extract(
-            "Ημερομηνία δημιουργίας: 03/08/2026\nΗ παρούσα βεβαίωση ισχύει για κάθε νόμιμη χρήση.",
+            "Αριθμός αίτησης 12345 | Κατηγορία βεβαίωση | Δημιουργία: 03/08/2026 | κατάσταση ενεργή",
             "Έγγραφο"
         )
         assertEquals("2026-08-03", result.issuedDate)
-        assertEquals("high", result.issuedConfidence)
         assertEquals(null, result.expiryDate)
+    }
+
+    @Test
+    fun expiryKeywordStillWinsWhenOtherKeywordsExistOnTheSameLine() {
+        val result = MetadataExtractor.extract(
+            "Κατηγορία άδεια | κατάσταση ενεργή | Λήξη: 05/09/2027 | υπενθύμιση",
+            "Έγγραφο"
+        )
+        assertEquals(null, result.issuedDate)
+        assertEquals("2027-09-05", result.expiryDate)
+    }
+
+    @Test
+    fun mapsCreationAndExpirySeparatelyWhenBothShareOneBusyLine() {
+        val result = MetadataExtractor.extract(
+            "Κατηγορία άδεια | Δημιουργία: 03/08/2026 | φορέας δήμος | Λήξη: 05/09/2027 | ισχύει κανονικά",
+            "Έγγραφο"
+        )
+        assertEquals("2026-08-03", result.issuedDate)
+        assertEquals("2027-09-05", result.expiryDate)
+        assertEquals("high", result.issuedConfidence)
+        assertEquals("high", result.expiryConfidence)
+    }
+
+    @Test
+    fun acceptsLabelOnPreviousLineForCreationAndExpiry() {
+        val created = MetadataExtractor.extract("Ημερομηνία δημιουργίας\n03/08/2026", "Έγγραφο")
+        val expires = MetadataExtractor.extract("Ημερομηνία λήξης\n05/09/2027", "Έγγραφο")
+        assertEquals("2026-08-03", created.issuedDate)
+        assertEquals("2027-09-05", expires.expiryDate)
     }
 
     @Test
