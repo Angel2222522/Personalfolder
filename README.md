@@ -1,6 +1,6 @@
 # Προσωπικός Φάκελος 2
 
-Offline-first Android εφαρμογή για ιδιωτική οργάνωση εγγράφων, υποθέσεων και προθεσμιών. Η έκδοση 2.0.0 κρατά το ίδιο `applicationId` (`com.angel.personalfolder`) και αυξάνει το `versionCode` από 1 σε 2.
+Offline-first Android εφαρμογή για ιδιωτική οργάνωση εγγράφων, υποθέσεων και προθεσμιών. Η έκδοση 2.0.1 κρατά το ίδιο `applicationId` (`com.angel.personalfolder`) και έχει `versionCode` 3.
 
 ## Πραγματικές δυνατότητες
 
@@ -8,7 +8,7 @@ Offline-first Android εφαρμογή για ιδιωτική οργάνωση 
 - Εσωτερικός viewer για PDF, εικόνες και mixed/multi-page documents με page counter, αλλαγή σελίδας, zoom και pan. Φορτώνεται μόνο η τρέχουσα σελίδα σε περιορισμένη ανάλυση.
 - Πολυσέλιδο camera session με επανάληψη τελευταίας φωτογραφίας, βασική offline βελτίωση προσανατολισμού/περιθωρίου/αντίθεσης και preview πριν την εισαγωγή.
 - Tesseract OCR με τα bundled `ell.traineddata` και `eng.traineddata`, bounded processing και εμφανές failed/retry state.
-- OCR προτάσεις για τίτλο, κατηγορία, φορέα, ημερομηνίες και αριθμό πρωτοκόλλου. Οι ημερομηνίες αξιολογούνται στο πραγματικό range του αρχικού OCR text και φέρουν confidence.
+- OCR προτάσεις για τίτλο, κατηγορία, φορέα, ημερομηνίες και αριθμό πρωτοκόλλου. Οι ημερομηνίες απαιτούν σαφή συμφραζόμενα· όταν δεν υπάρχει επαρκής ένδειξη παραμένουν κενές.
 - Χειροκίνητη επεξεργασία όλων των metadata: τίτλος, κατηγορία, tags, φορέας, ημερομηνίες και αριθμός πρωτοκόλλου.
 - Υποθέσεις με πλήρη πεδία, edit/delete, συνδεδεμένα documents, checklist με προαιρετικό document link, timeline και reminders deadline.
 - Room FTS αναζήτηση σε τίτλο, filename, OCR, φορέα, κατηγορία, tags και protocol number, με φίλτρα κατηγορίας, υπόθεσης, processing state και σύντομης λήξης.
@@ -26,7 +26,7 @@ Offline-first Android εφαρμογή για ιδιωτική οργάνωση 
 
 ## Αναβάθμιση από V1
 
-Η V2 χρησιμοποιεί Room migrations `1→2` και `2→3`, χωρίς destructive migration. Η `2→3` προσθέτει manual-metadata flag, source metadata για κάθε page, foreign keys/cascades και FTS index, διατηρώντας τα υπάρχοντα rows και αρχεία. Το signing key πρέπει να είναι το ίδιο με της εγκατεστημένης V1 για in-place APK upgrade.
+Η V2 χρησιμοποιεί Room migrations `1→2→3→4→5`, χωρίς destructive migration. Η `4→5` προσθέτει ξεχωριστή ένδειξη χειροκίνητης διόρθωσης ημερομηνίας λήξης. Το signing key πρέπει να είναι το ίδιο με της εγκατεστημένης V1 για in-place APK upgrade.
 
 ## Build και quality gates
 
@@ -48,6 +48,7 @@ gradle assembleRelease
 - [Feature inventory](docs/FEATURE_INVENTORY.md)
 - [Security and privacy](docs/SECURITY_PRIVACY.md)
 - [Testing report](docs/TESTING_REPORT.md)
+- [Release continuity](docs/RELEASE_CONTINUITY.md)
 - [Changelog](CHANGELOG.md)
 
 ## Γνωστοί περιορισμοί

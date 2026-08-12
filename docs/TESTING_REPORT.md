@@ -1,29 +1,32 @@
 # V2 testing report
 
-## Automated coverage added
+## Checks that were executed
 
-- `MetadataExtractorTest`: Greek/English-compatible protocol/date parsing, original-text date context, confidence for labeled and fallback dates, empty input and JSON escaping.
-- `AppDatabaseMigrationTest` (instrumentation): constructs a V1 schema, migrates through 1→2→3, verifies documents/pages/cases/relations/checklist/timeline/reminders, and verifies cascade/SET NULL behavior.
-- `BackupRoundTripTest` (instrumentation): AES-GCM password round-trip, wrong-password rejection, portable backup restore preserving page bytes/OCR, and corrupted-backup rejection.
-- CI compiles the instrumentation source and runs unit tests, lint, debug build, debug androidTest build and release build verification.
-- Standard baseline security scan: 9 source-backed V1 findings (7 medium, 2 low), with remediation status reviewed against the V2 source. It is explicitly a pre-V2 scan, not a claim that the final commit was independently rescanned.
+- Host Tesseract was run against the exact bundled `ell+eng` assets. Both assets passed `combine_tessdata -d` and the pinned SHA-256/size checks.
+- Controlled fixtures were OCR'd: Greek image, Greek/English image, low-quality image and a two-page PDF rendered to bounded pages.
+- The attached example PDF was used only in the local workspace. Its host OCR contained the specific ministry, protocol label/number and registry label/number, while no explicit expiry marker was found. The PDF and OCR output were not added to Git or GitHub.
+- The SQLite FTS trigger/normalization rule was exercised with uppercase Greek, tonos and accentless prefix queries.
+- `git diff --check` completed without whitespace errors.
+- GitHub Actions run [31590944545](https://github.com/Angel2222522/Personalfolder/actions/runs/31590944545), commit `82b71cf7f1158dfffda5870ecdbd730188e0ce7f`, passed unit tests, lint, instrumentation-test compilation, debug APK assembly and release APK assembly.
 
-## Commands
+## Test coverage
 
-```bash
-gradle testDebugUnitTest
-gradle lintDebug
-gradle assembleDebug
-gradle assembleDebugAndroidTest
-gradle assembleRelease
-```
+The CI JVM test task executed the metadata extractor/merge tests, including explicit expiry labels, unrelated/rejection/decision dates, composite date ranges, specific provider selection, protocol OCR variants, conservative null behavior and legacy/manual expiry handling. It also executed the existing pure JVM coverage.
 
-## Not claimed as verified without a device/emulator
+The CI compiled, but did not execute, Android instrumentation tests:
 
-Camera permission and multi-page capture, SAF providers from several document apps, biometric/device credential callbacks, Android 16 edge-to-edge/OEM rendering, large/malformed PDFs, actual Greek/English Tesseract recognition, reboot/timezone reminder delivery, and the complete UI accessibility tree.
+- `AppDatabaseMigrationTest`: V1→V5 schema and the new per-field expiry-manual flag.
+- `OcrWorkerIntegrationTest`: encrypted image/PDF OCR, page/document persistence, normalized FTS and failure state.
+- `MetadataPersistenceTest`: the safe expiry value is the value persisted in `DocumentEntity`.
+- Existing backup, file-format, search and restore coverage.
 
-The presence of a passing compile or lint run is not treated as proof of those flows. The final handoff should record the CI run and separately identify any physical-device scenarios not executed.
+## APK artifact audit
 
-## Latest remote verification
+- Release verification artifact: `app-release-unsigned.apk`.
+- Its `ell.traineddata` is 1,419,514 bytes with SHA-256 `4fba8a0b461038d51f1c20d043d4f2ac38c4e778f1b90830847f7bd8fa3ba726`.
+- Its `eng.traineddata` is 4,113,088 bytes with SHA-256 `7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2`.
+- The release artifact is unsigned because the repository does not contain the private release key. An install/update requires signing with the same key as the existing installation.
 
-Run 29 (`31523947009`) passed unit tests, lint, instrumentation compilation, debug APK build, release build verification and artifact publication for commit `18487d173f8af938dc62c41e88302a7119abbc79`. The published debug APK artifact is `9114272155`; release verification artifact is `9114273533`; Room schemas artifact is `9114274107`.
+## Checks intentionally not executed
+
+No emulator, physical device, `adb` installation, camera test, biometric hardware test or end-to-end Android runtime test was performed. The workflow has no emulator step, as requested.

@@ -279,6 +279,7 @@ class BackupService(private val context: Context) {
                     if (it == ProcessingState.QUEUED || it == ProcessingState.PROCESSING) "Η επεξεργασία δεν συνεχίστηκε μετά την επαναφορά. Επίλεξε επανάληψη OCR." else null
                 },
                 metadataManuallyEdited = item.optBoolean("metadataManuallyEdited", false),
+                expiryDateManuallyEdited = item.optBoolean("expiryDateManuallyEdited", false),
                 createdAt = item.optLong("createdAt", System.currentTimeMillis()),
                 updatedAt = item.optLong("updatedAt", System.currentTimeMillis())
             )
@@ -459,7 +460,7 @@ class BackupService(private val context: Context) {
     }
 
     private fun documentJson(item: DocumentEntity) = JSONObject().apply {
-        put("id", item.id); put("title", item.title); put("originalFileName", item.originalFileName); put("mimeType", item.mimeType); put("pageCount", item.pageCount); put("category", item.category); put("tags", item.tags); put("provider", item.provider); putNullable("issuedDate", item.issuedDate); putNullable("expiryDate", item.expiryDate); putNullable("protocolNumber", item.protocolNumber); put("ocrText", item.ocrText); put("extractedMetadataJson", item.extractedMetadataJson); put("processingState", item.processingState); putNullable("processingError", item.processingError); put("metadataManuallyEdited", item.metadataManuallyEdited); put("createdAt", item.createdAt); put("updatedAt", item.updatedAt)
+        put("id", item.id); put("title", item.title); put("originalFileName", item.originalFileName); put("mimeType", item.mimeType); put("pageCount", item.pageCount); put("category", item.category); put("tags", item.tags); put("provider", item.provider); putNullable("issuedDate", item.issuedDate); putNullable("expiryDate", item.expiryDate); putNullable("protocolNumber", item.protocolNumber); put("ocrText", item.ocrText); put("extractedMetadataJson", item.extractedMetadataJson); put("processingState", item.processingState); putNullable("processingError", item.processingError); put("metadataManuallyEdited", item.metadataManuallyEdited); put("expiryDateManuallyEdited", item.expiryDateManuallyEdited); put("createdAt", item.createdAt); put("updatedAt", item.updatedAt)
     }
 
     private fun pageJson(item: DocumentPageEntity) = JSONObject().apply { put("documentId", item.documentId); put("pageIndex", item.pageIndex); put("ocrText", item.ocrText); put("sourceFileName", item.sourceFileName); put("mimeType", item.mimeType) }

@@ -34,16 +34,22 @@ jobs:
         run: gradle lintDebug
       - name: Compile instrumentation tests
         run: gradle assembleDebugAndroidTest
+      # Emulator execution is deferred; packaging must not depend on it.
       - name: Build debug APK
+        if: always()
         run: gradle assembleDebug
       - name: Verify release build
+        if: always()
         run: gradle assembleRelease
       - name: Upload debug APK
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: personal-folder-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: ignore
       - name: Upload release APK verification artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: personal-folder-release-apk-verification

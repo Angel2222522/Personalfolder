@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ChecklistItemEntity::class,
         ReminderEntity::class
     ],
-    version = 3,
+    version = 5,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -171,6 +171,7 @@ abstract class AppDatabase : RoomDatabase() {
                 database.execSQL("DROP TABLE checklist_items")
                 database.execSQL("ALTER TABLE checklist_items_new RENAME TO checklist_items")
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_checklist_items_caseId ON checklist_items(caseId)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_checklist_items_linkedDocumentId ON checklist_items(linkedDocumentId)")
 
                 database.execSQL("""
                     CREATE TABLE reminders_new (
@@ -204,12 +205,28 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("DROP TRIGGER IF EXISTS documents_fts_ai")
+                database.execSQL("DROP TRIGGER IF EXISTS documents_fts_ad")
+                database.execSQL("DROP TRIGGER IF EXISTS documents_fts_au")
+                database.execSQL("DROP TABLE IF EXISTS documents_fts")
+                createSearchIndex(database)
+            }
+        }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE documents ADD COLUMN expiryDateManuallyEdited INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java,
                 "personal_folder.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .addCallback(object : RoomDatabase.Callback() {
                     override fun onCreate(database: SupportSQLiteDatabase) {
                         createSearchIndex(database)
@@ -225,13 +242,14 @@ abstract class AppDatabase : RoomDatabase() {
         private fun createSearchIndex(database: SupportSQLiteDatabase) {
             database.execSQL("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts4(
-                    documentId, title, originalFileName, ocrText, provider, category, tags, protocolNumber
+                    documentId, title, originalFileName, ocrText, provider, category, tags, protocolNumber,
+                    tokenize=unicode61
                 )
             """.trimIndent())
             database.execSQL("""
                 CREATE TRIGGER IF NOT EXISTS documents_fts_ai AFTER INSERT ON documents BEGIN
                     INSERT INTO documents_fts(documentId, title, originalFileName, ocrText, provider, category, tags, protocolNumber)
-                    VALUES (new.id, new.title, new.originalFileName, new.ocrText, new.provider, new.category, new.tags, new.protocolNumber);
+                    VALUES (new.id, ${normalizedFtsSql("new.title")}, ${normalizedFtsSql("new.originalFileName")}, ${normalizedFtsSql("new.ocrText")}, ${normalizedFtsSql("new.provider")}, ${normalizedFtsSql("new.category")}, ${normalizedFtsSql("new.tags")}, ${normalizedFtsSql("new.protocolNumber")});
                 END
             """.trimIndent())
             database.execSQL("""
@@ -243,7 +261,7 @@ abstract class AppDatabase : RoomDatabase() {
                 CREATE TRIGGER IF NOT EXISTS documents_fts_au AFTER UPDATE ON documents BEGIN
                     DELETE FROM documents_fts WHERE documentId = old.id;
                     INSERT INTO documents_fts(documentId, title, originalFileName, ocrText, provider, category, tags, protocolNumber)
-                    VALUES (new.id, new.title, new.originalFileName, new.ocrText, new.provider, new.category, new.tags, new.protocolNumber);
+                    VALUES (new.id, ${normalizedFtsSql("new.title")}, ${normalizedFtsSql("new.originalFileName")}, ${normalizedFtsSql("new.ocrText")}, ${normalizedFtsSql("new.provider")}, ${normalizedFtsSql("new.category")}, ${normalizedFtsSql("new.tags")}, ${normalizedFtsSql("new.protocolNumber")});
                 END
             """.trimIndent())
             val count = database.query("SELECT COUNT(*) FROM documents_fts").use { cursor ->
@@ -253,9 +271,9 @@ abstract class AppDatabase : RoomDatabase() {
                 buildList {
                     while (cursor.moveToNext()) {
                         add(arrayOf(
-                            cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getString(3),
-                            cursor.getString(4), cursor.getString(5), cursor.getString(6),
-                            if (cursor.isNull(7)) null else cursor.getString(7)
+                            cursor.getString(0), SearchText.normalize(cursor.getString(1)), SearchText.normalize(cursor.getString(2)), SearchText.normalize(cursor.getString(3)),
+                            SearchText.normalize(cursor.getString(4)), SearchText.normalize(cursor.getString(5)), SearchText.normalize(cursor.getString(6)),
+                            if (cursor.isNull(7)) null else SearchText.normalize(cursor.getString(7))
                         ))
                     }
                 }
@@ -270,6 +288,28 @@ abstract class AppDatabase : RoomDatabase() {
                     statement.executeInsert()
                 }
             }
+        }
+
+        /**
+         * SQLite's unicode61 tokenizer does not remove Greek tonos on all
+         * Android SQLite versions. Strip the common precomposed Greek forms
+         * in the trigger so a query such as "ημερομηνια" matches OCR text
+         * containing "Ημερομηνία". Combining marks cover decomposed input.
+         */
+        private fun normalizedFtsSql(column: String): String {
+            var expression = "coalesce($column, '')"
+            val replacements = listOf(
+                "ά" to "α", "Ά" to "Α", "έ" to "ε", "Έ" to "Ε",
+                "ή" to "η", "Ή" to "Η", "ί" to "ι", "Ί" to "Ι",
+                "ό" to "ο", "Ό" to "Ο", "ύ" to "υ", "Ύ" to "Υ",
+                "ώ" to "ω", "Ώ" to "Ω", "ϊ" to "ι", "Ϊ" to "Ι",
+                "ϋ" to "υ", "Ϋ" to "Υ", "ΐ" to "ι", "ΰ" to "υ"
+            )
+            replacements.forEach { (from, to) ->
+                expression = "replace($expression, '$from', '$to')"
+            }
+            expression = "replace(replace($expression, char(769), ''), char(776), '')"
+            return expression
         }
     }
 }

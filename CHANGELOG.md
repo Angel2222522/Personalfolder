@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.0.1
+
+### OCR metadata correctness
+
+- Removed the positional fallback that treated the last date in a document as its expiry date.
+- Expiry dates now require explicit expiry wording; unrelated issue, rejection, decision, study-year and date-range values remain unset.
+- Provider extraction prefers specific ministries, directorates, organizations and services over generic state headers and joins wrapped header lines.
+- Protocol extraction recognizes Greek OCR variants such as `Αριθµ. Πρωτ` and rejects registry-number labels or values without a numeric part.
+- Added a per-field manual-expiry flag, safe Room migration `4→5`, and reprocessing behavior that clears stale automatic expiry values while preserving user corrections.
+
+### Verification
+
+- Added anonymized unit and Android persistence/migration coverage for the corrected metadata flow.
+
 ## 2.0.0
 
 ### Data safety

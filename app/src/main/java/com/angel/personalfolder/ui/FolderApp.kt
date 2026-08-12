@@ -156,12 +156,12 @@ fun FolderApp(
             if (selectedDocumentId != null) {
                 TopAppBar(
                     title = { Text("Στοιχεία εγγράφου") },
-                    navigationIcon = { IconButton(onClick = { selectedDocumentId = null }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } }
+                    navigationIcon = { IconButton(onClick = { selectedDocumentId = null }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Πίσω") } }
                 )
             } else if (selectedCaseId != null) {
                 TopAppBar(
                     title = { Text("Υπόθεση") },
-                    navigationIcon = { IconButton(onClick = { selectedCaseId = null }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } }
+                    navigationIcon = { IconButton(onClick = { selectedCaseId = null }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Πίσω") } }
                 )
             } else {
                 TopAppBar(title = { Text("Προσωπικός Φάκελος", fontWeight = FontWeight.SemiBold) })
@@ -344,7 +344,7 @@ private fun DocumentsScreen(
         OutlinedTextField(value = query, onValueChange = onQuery, modifier = Modifier.fillMaxWidth().padding(top = 12.dp), placeholder = { Text("Αναζήτηση σε τίτλους, OCR και στοιχεία") }, leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true, trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { onQuery("") }) { Text("Καθαρισμός") } })
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             FilterMenuChip("Κατηγορία", category.ifBlank { "Όλες" }, listOf("" to "Όλες") + listOf("Ταυτότητα / προσωπικά", "Μετανάστευση / άδειες", "Κατοικία", "Δημόσιες υπηρεσίες", "Εργασία", "Οικονομικά", "Λογαριασμοί", "Υγεία", "Συμβόλαια", "Άλλα").map { it to it }, onCategory)
-            FilterMenuChip("Κατάσταση", processingState.ifBlank { "Όλες" }, listOf("" to "Όλες", ProcessingState.PROCESSED to "Έτοιμα", ProcessingState.PROCESSING to "Επεξεργασία", ProcessingState.FAILED to "Αποτυχία"), onProcessingState)
+            FilterMenuChip("Κατάσταση", processingState.ifBlank { "Όλες" }, listOf("" to "Όλες", ProcessingState.QUEUED to "Σε αναμονή", ProcessingState.PROCESSING to "Επεξεργασία", ProcessingState.PROCESSED to "Έτοιμα", ProcessingState.FAILED to "Αποτυχία"), onProcessingState)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             FilterMenuChip("Υπόθεση", cases.firstOrNull { it.id == caseId }?.title ?: "Όλες", listOf(null to "Όλες") + cases.map { it.id to it.title }, onCaseId)
@@ -434,8 +434,10 @@ private fun DocumentDetailScreen(document: DocumentEntity, viewModel: FolderView
             Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
                 Text(document.ocrText.ifBlank { "Δεν αναγνωρίστηκε ακόμη κείμενο." }, Modifier.padding(14.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (document.processingState == ProcessingState.FAILED) {
+            if (document.processingError?.isNotBlank() == true && document.processingState != ProcessingState.PROCESSED) {
                 Text(document.processingError.orEmpty(), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 6.dp))
+            }
+            if (document.processingState == ProcessingState.FAILED || document.processingState == ProcessingState.QUEUED && document.processingError?.isNotBlank() == true) {
                 OutlinedButton(onClick = { viewModel.rerunOcr(document.id) }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) { Text("Επανάληψη OCR") }
             }
         }
@@ -561,7 +563,7 @@ private fun SettingsScreen(lockEnabled: Boolean, onEnableLock: () -> Unit, onDis
                 }
             }
         }
-        item { Text("Έκδοση 2.0.0 · Ελληνικό περιβάλλον · Λειτουργία χωρίς σύνδεση", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) }
+        item { Text("Έκδοση 2.0.1 · Ελληνικό περιβάλλον · Λειτουργία χωρίς σύνδεση", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) }
     }
 }
 
