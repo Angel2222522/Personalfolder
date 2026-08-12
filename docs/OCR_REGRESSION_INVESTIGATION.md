@@ -98,20 +98,30 @@
 - Έλεγχος του ιστορικού μεγεθών και blobs των μοντέλων σε όλα τα κρίσιμα commits.
 - Προστέθηκε instrumentation test που ελέγχει τα μοντέλα μέσα στα packaged APK
   assets και όχι μόνο στον φάκελο του source code.
+- GitHub Actions run `31615301590` ολοκληρώθηκε με επιτυχία στο Android emulator:
+  unit tests, lint, instrumentation compilation και 11/11 instrumentation tests.
+- Τα 11/11 runtime tests περιλαμβάνουν migration, backup/restore, ελληνικό και
+  αγγλικό OCR εικόνας, πολυσέλιδο PDF, κενή εικόνα, κατεστραμμένο input και
+  έλεγχο των packaged Tesseract models.
+- Το debug APK του ίδιου επιτυχούς run περιέχει `ell.traineddata` 1.419.514
+  bytes και `eng.traineddata` 4.113.088 bytes, με τα αναμενόμενα SHA-256.
+- Η unsigned release compilation ολοκληρώθηκε επιτυχώς στο ίδιο run.
+- Η μόνιμη release υπογραφή δεν εκτελέστηκε στο pull request, επειδή το CI την
+  επιτρέπει μόνο σε push του `main` με τα μόνιμα signing secrets.
 
 ## Τι δεν έχει αποδειχθεί ακόμη
 
-Στο παρόν περιβάλλον δεν υπάρχουν Android SDK, Gradle wrapper, `adb` ή συσκευή.
-Επομένως δεν έχει ακόμη εκτελεστεί εδώ:
+Στο παρόν περιβάλλον δεν υπάρχουν Android SDK, Gradle wrapper, `adb` ή φυσική
+συσκευή. Το Android runtime επαληθεύτηκε μέσω GitHub Actions emulator, όχι σε
+φυσικό τηλέφωνο. Δεν έχει επαληθευτεί:
 
-- Gradle build της τρέχουσας έκδοσης,
-- Android unit/instrumentation test suite,
-- WorkManager test σε Android runtime,
-- OCR πάνω σε πραγματική συσκευή,
-- έλεγχος εγκατάστασης ως release update με την υπάρχουσα υπογραφή.
+- εγκατάσταση του APK ως ενημέρωση της παλιάς release εφαρμογής,
+- η μόνιμη release υπογραφή στο τελικό APK,
+- OCR σε πραγματικές φωτογραφίες/έγγραφα του χρήστη και όχι στα ελεγχόμενα
+  fixtures των tests.
 
-Αυτά θα αναφερθούν ως «μη επαληθευμένα» μέχρι να εκτελεστούν από CI ή σε
-συσκευή. Δεν θα παρουσιαστεί compilation ως απόδειξη λειτουργίας.
+Δεν παρουσιάζεται compilation ως απόδειξη λειτουργίας· η λειτουργία που
+καλύπτουν τα tests επιβεβαιώθηκε με Android runtime.
 
 ## Τι πρέπει να παραμείνει ίδιο
 
@@ -125,6 +135,13 @@
 
 Δεν έγινε destructive migration, διαγραφή δεδομένων, αλλαγή identifiers,
 αλλαγή encryption assumptions ή τυφλό rollback.
+
+Για τη συγκεκριμένη παράδοση ο χρήστης ενέκρινε ρητά εξαίρεση από τη συνέχεια
+της προηγούμενης εγκατάστασης, μόνο για να παραλάβει γρηγορότερα APK. Το APK
+είναι debug/standalone (`com.angel.personalfolder.debug`) και δεν παρουσιάζεται
+ως ενημέρωση της release εφαρμογής (`com.angel.personalfolder`). Η εξαίρεση δεν
+αλλάζει τις release continuity απαιτήσεις του project για επόμενες κανονικές
+εκδόσεις.
 
 ## Επόμενη καταχώριση
 
