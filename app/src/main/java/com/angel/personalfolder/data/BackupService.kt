@@ -42,7 +42,26 @@ class BackupService(private val context: Context) {
                 val ids = journal.optJSONArray("documentIds") ?: return@buildSet
                 for (index in 0 until ids.length()) add(ids.optString(index))
             }
-            val currentIds = database.documentDao().getAll().map { it.id }.toSet()
+            val currentDocuments = database.documentDao().getAll()
+            val currentPages = database.documentPageDao().getAll()
+            val currentCases = database.caseDao().getAll()
+            val currentRelations = database.caseDocumentDao().getAll()
+            val currentEvents = database.timelineDao().getAll()
+            val currentChecklist = database.checklistDao().getAll()
+            val currentReminders = database.reminderDao().getAll()
+            val expectedDatabaseFingerprint = journal.optString("databaseFingerprint")
+            val expectedFilesystemFingerprint = journal.optString("filesystemFingerprint")
+            val currentIds = currentDocuments.map { it.id }.toSet()
+            val databaseGenerationMatches = expectedDatabaseFingerprint.isNotBlank() &&
+                expectedDatabaseFingerprint == RestoreGenerationFingerprint.of(
+                    currentDocuments,
+                    currentPages,
+                    currentCases,
+                    currentRelations,
+                    currentEvents,
+                    currentChecklist,
+                    currentReminders
+                )
             val state = RestoreRecoveryState(
                 phase = journal.optString("phase"),
                 currentDocumentIds = currentIds,
@@ -50,7 +69,9 @@ class BackupService(private val context: Context) {
                 rootExists = root.isDirectory,
                 previousRootExists = previous.isDirectory,
                 stagingRootExists = staging.isDirectory,
-                rootMatchesExpected = rootMatchesExpected(root, expectedIds)
+                rootMatchesExpected = expectedFilesystemFingerprint.isNotBlank() &&
+                    expectedFilesystemFingerprint == RestoreGenerationFingerprint.filesystemOf(root),
+                databaseGenerationMatches = databaseGenerationMatches
             )
             when (RestoreRecoveryPolicy.decide(state)) {
                 RestoreRecoveryAction.FINALIZE_NEW_GENERATION -> {
@@ -116,6 +137,9 @@ class BackupService(private val context: Context) {
                             plain.delete()
                         }
                     }
+                }
+                require(zip.length() in 1..MAX_BACKUP_ARCHIVE_BYTES) {
+                    "Το αντίγραφο είναι υπερβολικά μεγάλο."
                 }
                 BackupCrypto.encryptFile(zip, context, destination, password.toCharArray())
                 true
@@ -228,13 +252,38 @@ class BackupService(private val context: Context) {
                 .map { it.id }
                 .toSet()
             val reminders = parseReminders(manifest.optJSONArray("reminders"), caseIds, documentIds, confirmedExpiryDocumentIds)
+            val restoredPages = documents.flatMap { document ->
+                pageDescriptors.filter { it.documentId == document.id }.map { descriptor ->
+                    DocumentPageEntity(
+                        documentId = descriptor.documentId,
+                        pageIndex = descriptor.pageIndex,
+                        encryptedPath = root.resolve("${descriptor.documentId}/page_${descriptor.pageIndex}.pf").absolutePath,
+                        ocrText = descriptor.ocrText,
+                        sourceFileName = descriptor.sourceFileName,
+                        mimeType = descriptor.mimeType
+                    )
+                }
+            }
+            val expectedDatabaseFingerprint = RestoreGenerationFingerprint.of(
+                documents,
+                restoredPages,
+                cases,
+                relations,
+                events,
+                checklist,
+                reminders
+            )
+            val expectedFilesystemFingerprint = RestoreGenerationFingerprint.filesystemOf(stagingRoot)
+                ?: error("Δεν ήταν δυνατή η επαλήθευση των αρχείων επαναφοράς.")
 
             writeRestoreJournal(
                 phase = "prepared",
                 root = root,
                 previousRoot = previousRoot,
                 stagingRoot = stagingRoot,
-                documentIds = documentIds
+                documentIds = documentIds,
+                databaseFingerprint = expectedDatabaseFingerprint,
+                filesystemFingerprint = expectedFilesystemFingerprint
             )
 
             previousMoved = if (root.exists()) {
@@ -252,7 +301,15 @@ class BackupService(private val context: Context) {
             require(!root.exists()) { "Δεν ήταν δυνατή η προετοιμασία της επαναφοράς." }
             require(stagingRoot.renameTo(root)) { "Δεν ήταν δυνατή η εγκατάσταση των αρχείων επαναφοράς." }
             filesInstalled = true
-            writeRestoreJournal("files_installed", root, previousRoot, stagingRoot, documentIds)
+            writeRestoreJournal(
+                phase = "files_installed",
+                root = root,
+                previousRoot = previousRoot,
+                stagingRoot = stagingRoot,
+                documentIds = documentIds,
+                databaseFingerprint = expectedDatabaseFingerprint,
+                filesystemFingerprint = expectedFilesystemFingerprint
+            )
 
             database.withTransaction {
                 database.caseDocumentDao().deleteAll()
@@ -263,18 +320,7 @@ class BackupService(private val context: Context) {
                 database.documentDao().deleteAll()
                 database.caseDao().deleteAll()
                 database.documentDao().insertAll(documents)
-                database.documentPageDao().insertAll(documents.flatMap { document ->
-                    pageDescriptors.filter { it.documentId == document.id }.map { descriptor ->
-                        DocumentPageEntity(
-                            documentId = descriptor.documentId,
-                            pageIndex = descriptor.pageIndex,
-                            encryptedPath = root.resolve("${descriptor.documentId}/page_${descriptor.pageIndex}.pf").absolutePath,
-                            ocrText = descriptor.ocrText,
-                            sourceFileName = descriptor.sourceFileName,
-                            mimeType = descriptor.mimeType
-                        )
-                    }
-                })
+                database.documentPageDao().insertAll(restoredPages)
                 database.caseDao().insertAll(cases)
                 relations.forEach { database.caseDocumentDao().insert(it) }
                 events.forEach { database.timelineDao().insert(it) }
@@ -284,7 +330,15 @@ class BackupService(private val context: Context) {
             databaseCommitted = true
             // If this write fails, the new DB and files are deliberately kept;
             // startup recovery will finalize them instead of rolling them back.
-            writeRestoreJournal("database_committed", root, previousRoot, stagingRoot, documentIds)
+            writeRestoreJournal(
+                phase = "database_committed",
+                root = root,
+                previousRoot = previousRoot,
+                stagingRoot = stagingRoot,
+                documentIds = documentIds,
+                databaseFingerprint = expectedDatabaseFingerprint,
+                filesystemFingerprint = expectedFilesystemFingerprint
+            )
             ReminderScheduler.rescheduleAll(context)
             FileCrypto.deleteRecursivelyStrict(previousRoot)
             clearRestoreJournal()
@@ -548,7 +602,9 @@ class BackupService(private val context: Context) {
         root: File,
         previousRoot: File,
         stagingRoot: File,
-        documentIds: Set<String>
+        documentIds: Set<String>,
+        databaseFingerprint: String,
+        filesystemFingerprint: String
     ) {
         val journal = JSONObject().apply {
             put("phase", phase)
@@ -556,6 +612,8 @@ class BackupService(private val context: Context) {
             put("previousRoot", previousRoot.canonicalPath)
             put("stagingRoot", stagingRoot.canonicalPath)
             put("documentIds", JSONArray().apply { documentIds.forEach(::put) })
+            put("databaseFingerprint", databaseFingerprint)
+            put("filesystemFingerprint", filesystemFingerprint)
         }
         val journalFile = context.filesDir.resolve(RESTORE_JOURNAL)
         val temporary = context.filesDir.resolve(".$RESTORE_JOURNAL.${System.nanoTime()}.part")
@@ -569,17 +627,6 @@ class BackupService(private val context: Context) {
 
     private fun clearRestoreJournal() {
         context.filesDir.resolve(RESTORE_JOURNAL).delete()
-    }
-
-    private fun rootMatchesExpected(root: File, expectedIds: Set<String>): Boolean {
-        if (!root.isDirectory) return false
-        val actualIds = root.listFiles().orEmpty()
-            .filter { it.isDirectory }
-            .map { it.name }
-            .toSet()
-        return actualIds == expectedIds && expectedIds.all { id ->
-            root.resolve(id).listFiles().orEmpty().any { it.isFile && it.name.endsWith(".pf") }
-        }
     }
 
     private fun safeJournalFile(path: String, expectedParent: File): File? {

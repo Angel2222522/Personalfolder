@@ -31,7 +31,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
-        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "platforms;android-35" "system-images;android-35;google_apis;x86_64"
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "platforms;android-30" "system-images;android-30;google_apis;x86"
 
       - name: Run unit tests
         run: gradle testDebugUnitTest
@@ -48,20 +48,45 @@ jobs:
       - name: Run instrumentation tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          # The hosted runner currently has no KVM access. API 35 x86_64
+          # remained offline for 15 minutes and crashed before starting any
+          # test; API 30 x86 is the smallest supported image that still
+          # exercises PdfRenderer, Room and Android Keystore on-device.
+          api-level: 30
           target: google_apis
-          arch: x86_64
+          arch: x86
           # avdmanager uses the lowercase hardware-profile identifier on the
           # current GitHub runner SDK. The display name `Pixel_2` is not a
           # valid device id there and prevents instrumentation from starting.
           profile: pixel_2
-          script: gradle connectedDebugAndroidTest
+          cores: 4
+          emulator-boot-timeout: 900
+          script: |
+            set +e
+            gradle connectedDebugAndroidTest --stacktrace
+            status=$?
+            adb logcat -d -b all -v threadtime > "$RUNNER_TEMP/personal-folder-instrumentation-logcat.txt" || true
+            echo "--- Recent device logcat after instrumentation failure ---"
+            tail -n 400 "$RUNNER_TEMP/personal-folder-instrumentation-logcat.txt" || true
+            exit "$status"
 
       - name: Upload debug APK
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: personal-folder-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+
+      - name: Upload instrumentation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-folder-instrumentation-diagnostics
+          path: |
+            app/build/reports/androidTests/**
+            app/build/outputs/androidTest-results/**
+            ${{ runner.temp }}/personal-folder-instrumentation-logcat.txt
+          if-no-files-found: ignore
 
       - name: Verify unsigned release compilation on pull requests
         if: github.event_name == 'pull_request'
