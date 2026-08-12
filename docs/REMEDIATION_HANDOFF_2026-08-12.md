@@ -56,17 +56,60 @@ The PDF end-to-end path is now covered in source and regression tests: imported 
 
 Permanent signing and signed release artifact verification remain intentionally restricted to a push on `main` with the existing four signing secrets. They are not required to close Part 1 and are not claimed here.
 
-## Part 2 work still required
+## Part 2 closure verification
 
-Continue from this file and the latest remediation branch; do not restart the audit. Part 2 must:
+Part 2 implementation and targeted verification were run on the current PR head
+`8fdca9a9b8f3341472769b3e40f359111ffbf92f` (`codex/personal-folder-remediation`).
+The complete PF-001 to PF-032 matrix is in
+[`docs/PF_VERIFICATION_MATRIX.md`](PF_VERIFICATION_MATRIX.md).
 
-1. inspect the latest CI result and fix only evidence-backed failures;
-2. complete the current-code verification matrix for PF-001 through PF-032;
-3. add the separate `PDF-DARK-RENDER / OCR INPUT CORRUPTION` audit entry with its technical cause and test evidence;
-4. finish any remaining lifecycle, reminder, UI selection, import, backup/restore and OCR edge-case tests;
-5. resolve or explicitly record the product decision required by PF-018, without inventing semantics;
-6. run the complete CI/emulator verification and perform a fresh end-to-end source/runtime audit;
-7. verify release identity, monotonic version code, migration path and permanent signing on `main` before producing an APK;
-8. add the final report with one honest status for every PF item and the APK/build evidence.
+The final pull-request Actions run is **#89**, run id `31641238727`:
 
-The current branch is intentionally not presented as a finished release until those Part 2 checks are complete.
+- unit tests: passed;
+- lint: passed;
+- instrumentation compilation: passed;
+- debug APK: passed;
+- emulator instrumentation: **16 tests, 0 failures, 0 errors, 0 skipped**;
+- pull-request release compilation: passed;
+- Room schema upload: passed.
+
+The 16 emulator tests cover 2 migration tests, 4 backup/restore tests, 2 PDF
+bitmap tests, 2 original-PDF/multi-page tests, 4 repository
+import/delete/export/reminder tests and 2 encrypted picker-state tests. The
+run artifacts are:
+
+- debug APK, artifact `9159204057`, digest
+  `sha256:d1595e52ccab97f5756da26927fb774ba99fd4ccddb20fd21666266bcaaa69e5`;
+- instrumentation diagnostics, artifact `9159204738`, digest
+  `sha256:ecc9a205fdb6b6ea92e67ffbe540c1148f50fe29f10b301486163b5e2280e859`;
+- Room schemas, artifact `9159263536`, digest
+  `sha256:def0dea8430e6fd818a8954c9395a6b82b6cb311add1dfdc2251b973f3201024`.
+
+The Part 2 changes cover filtered document state, per-field OCR ownership and
+confirmation, strict protocol/provider/date/category parsing, reminder
+permission and lifecycle behavior, serialized operations, import validation,
+encrypted picker state, complete FTS repair, share-file cleanup and the single
+signing helper. Import/delete/export bytes and reminder creation/removal are
+verified in `RepositoryImportDeleteExportTest`.
+
+PF-018 remains explicitly open as a product decision. The code does not invent
+whether `COMPLETED` cases should be hidden from active views or stop retaining
+deadline reminders. Current behavior is preserved and recorded in the matrix.
+
+## Release blocker
+
+The PR workflow intentionally skips permanent signing. Release continuity was
+checked against the source: release application id is
+`com.angel.personalfolder`, current `versionCode` is 3 / `versionName` is
+2.0.1, and Room migrations remain explicit through version 4 with no
+destructive fallback. The latest `main` signing run is **#51**, id
+`31593963638`; it stopped in the signing-preparation step because all four
+permanent signing secrets were empty. The repository has no tag, GitHub
+release, or signed release artifact from which an update certificate can be
+verified.
+
+Therefore no APK is presented as a final or compatible update. The PR debug
+APK is a test artifact only; producing the requested final release APK requires
+the existing permanent keystore/secrets to be restored and a successful push to
+`main` that verifies the recorded certificate fingerprint. PF-018 also needs a
+product-owner decision before the remediation can be called fully closed.
