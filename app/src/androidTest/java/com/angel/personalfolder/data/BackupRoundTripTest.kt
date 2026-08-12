@@ -69,51 +69,57 @@ class BackupRoundTripTest {
     }
 
     @Test
-    fun newBackupsRejectShortPasswords() = runBlocking {
-        val backup = context.cacheDir.resolve("share/backup-test-short-password.pfb").apply { parentFile?.mkdirs(); createNewFile() }
-        val backupUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", backup)
-        try {
-            BackupService(context).create(backupUri, "short")
-            fail("A new backup must reject a short password")
-        } catch (_: IllegalArgumentException) {
-            // Expected policy rejection.
-        } finally {
-            backup.delete()
+    fun newBackupsRejectShortPasswords() {
+        runBlocking {
+            val backup = context.cacheDir.resolve("share/backup-test-short-password.pfb").apply { parentFile?.mkdirs(); createNewFile() }
+            val backupUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", backup)
+            try {
+                BackupService(context).create(backupUri, "short")
+                fail("A new backup must reject a short password")
+            } catch (_: IllegalArgumentException) {
+                // Expected policy rejection.
+            } finally {
+                backup.delete()
+            }
         }
     }
 
     @Test
-    fun portableBackupRestoreRoundTripPreservesPageAndOcr() = runBlocking {
-        val backup = context.cacheDir.resolve("share/backup-test-roundtrip.pfb").apply { parentFile?.mkdirs(); createNewFile() }
-        val backupUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", backup)
-        val service = BackupService(context)
-        service.create(backupUri, password)
+    fun portableBackupRestoreRoundTripPreservesPageAndOcr() {
+        runBlocking {
+            val backup = context.cacheDir.resolve("share/backup-test-roundtrip.pfb").apply { parentFile?.mkdirs(); createNewFile() }
+            val backupUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", backup)
+            val service = BackupService(context)
+            service.create(backupUri, password)
 
-        database.withTransaction {
-            database.documentPageDao().deleteForDocument(documentId)
-            database.documentDao().deleteById(documentId)
+            database.withTransaction {
+                database.documentPageDao().deleteForDocument(documentId)
+                database.documentDao().deleteById(documentId)
+            }
+            FileCrypto.deleteRecursively(documentRoot)
+            service.restore(backupUri, password)
+
+            val restored = database.documentDao().getById(documentId)
+            assertNotNull(restored)
+            assertEquals("OCR test", database.documentPageDao().getForDocument(documentId).single().ocrText)
+            val plain = context.cacheDir.resolve("share/backup-test-plain.bin")
+            FileCrypto.decryptToTemp(File(restored!!.encryptedPath), plain)
+            assertEquals("sensitive page", plain.readText())
+            plain.delete()
         }
-        FileCrypto.deleteRecursively(documentRoot)
-        service.restore(backupUri, password)
-
-        val restored = database.documentDao().getById(documentId)
-        assertNotNull(restored)
-        assertEquals("OCR test", database.documentPageDao().getForDocument(documentId).single().ocrText)
-        val plain = context.cacheDir.resolve("share/backup-test-plain.bin")
-        FileCrypto.decryptToTemp(File(restored!!.encryptedPath), plain)
-        assertEquals("sensitive page", plain.readText())
-        plain.delete()
     }
 
     @Test
-    fun corruptedPortableBackupDoesNotChangeDatabase() = runBlocking {
-        val backup = context.cacheDir.resolve("share/backup-test-corrupt.pfb").apply { parentFile?.mkdirs(); createNewFile() }
-        val backupUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", backup)
-        BackupService(context).create(backupUri, password)
-        val bytes = backup.readBytes()
-        bytes[bytes.lastIndex] = (bytes.last().toInt() xor 0x7f).toByte()
-        backup.writeBytes(bytes)
-        assertThrows(Exception::class.java) { runBlocking { BackupService(context).restore(backupUri, password) } }
-        assertNotNull(database.documentDao().getById(documentId))
+    fun corruptedPortableBackupDoesNotChangeDatabase() {
+        runBlocking {
+            val backup = context.cacheDir.resolve("share/backup-test-corrupt.pfb").apply { parentFile?.mkdirs(); createNewFile() }
+            val backupUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", backup)
+            BackupService(context).create(backupUri, password)
+            val bytes = backup.readBytes()
+            bytes[bytes.lastIndex] = (bytes.last().toInt() xor 0x7f).toByte()
+            backup.writeBytes(bytes)
+            assertThrows(Exception::class.java) { runBlocking { BackupService(context).restore(backupUri, password) } }
+            assertNotNull(database.documentDao().getById(documentId))
+        }
     }
 }
