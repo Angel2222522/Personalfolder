@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.room.withTransaction
 import androidx.work.WorkManager
 import com.angel.personalfolder.security.BackupCrypto
+import com.angel.personalfolder.security.DocumentStorage
 import com.angel.personalfolder.security.FileCrypto
 import com.angel.personalfolder.workers.OcrWorker
 import kotlinx.coroutines.Dispatchers
@@ -60,52 +61,56 @@ class BackupService(private val context: Context) {
     }
 
     suspend fun create(destination: Uri, password: String) = withContext(Dispatchers.IO) {
-        require(password.length >= MIN_NEW_BACKUP_PASSWORD_LENGTH) { "Ο νέος κωδικός backup πρέπει να έχει τουλάχιστον $MIN_NEW_BACKUP_PASSWORD_LENGTH χαρακτήρες." }
-        val zip = context.cacheDir.resolve("backup/personal_folder_${System.currentTimeMillis()}.zip").apply {
-            parentFile?.mkdirs()
-        }
-        try {
-            val payload = snapshot()
-            ZipOutputStream(FileOutputStream(zip)).use { output ->
-                output.putNextEntry(ZipEntry("backup.json"))
-                output.write(payload.toString().toByteArray(Charsets.UTF_8))
-                output.closeEntry()
-                val pages = database.documentPageDao().getAll().distinctBy { it.documentId to it.pageIndex }
-                pages.forEach { page ->
-                    val source = File(page.encryptedPath)
-                    require(FileCrypto.isPrivateDocumentFile(context, source)) { "Η σελίδα βρίσκεται εκτός του ιδιωτικού χώρου." }
-                    require(source.isFile) { "Λείπει σελίδα από το έγγραφο ${page.documentId}." }
-                    val plain = context.cacheDir.resolve("backup/plain_${UUID.randomUUID()}.tmp").apply { parentFile?.mkdirs() }
-                    try {
-                        FileCrypto.decryptToTemp(source, plain)
-                        output.putNextEntry(ZipEntry("files/${page.documentId}/${page.pageIndex}.pf"))
-                        FileInputStream(plain).use { it.copyLimitedTo(output, MAX_BACKUP_BYTES) }
-                        output.closeEntry()
-                    } finally {
-                        plain.delete()
+        LibraryOperationCoordinator.withExclusive {
+            require(password.length >= MIN_NEW_BACKUP_PASSWORD_LENGTH) { "Ο νέος κωδικός backup πρέπει να έχει τουλάχιστον $MIN_NEW_BACKUP_PASSWORD_LENGTH χαρακτήρες." }
+            val zip = context.cacheDir.resolve("backup/personal_folder_${System.currentTimeMillis()}.zip").apply {
+                parentFile?.mkdirs()
+            }
+            try {
+                val payload = snapshot()
+                ZipOutputStream(FileOutputStream(zip)).use { output ->
+                    output.putNextEntry(ZipEntry("backup.json"))
+                    output.write(payload.toString().toByteArray(Charsets.UTF_8))
+                    output.closeEntry()
+                    val pages = database.documentPageDao().getAll().distinctBy { it.documentId to it.pageIndex }
+                    pages.forEach { page ->
+                        val source = File(page.encryptedPath)
+                        require(FileCrypto.isPrivateDocumentFile(context, source)) { "Η σελίδα βρίσκεται εκτός του ιδιωτικού χώρου." }
+                        require(source.isFile) { "Λείπει σελίδα από το έγγραφο ${page.documentId}." }
+                        val plain = context.cacheDir.resolve("backup/plain_${UUID.randomUUID()}.tmp").apply { parentFile?.mkdirs() }
+                        try {
+                            FileCrypto.decryptToTemp(source, plain)
+                            output.putNextEntry(ZipEntry("files/${page.documentId}/${page.pageIndex}.pf"))
+                            FileInputStream(plain).use { it.copyLimitedTo(output, MAX_BACKUP_BYTES) }
+                            output.closeEntry()
+                        } finally {
+                            plain.delete()
+                        }
                     }
                 }
+                BackupCrypto.encryptFile(zip, context, destination, password.toCharArray())
+                true
+            } finally {
+                zip.delete()
             }
-            BackupCrypto.encryptFile(zip, context, destination, password.toCharArray())
-            true
-        } finally {
-            zip.delete()
         }
     }
 
     suspend fun restore(source: Uri, password: String) = withContext(Dispatchers.IO) {
         require(password.length >= MIN_RESTORE_PASSWORD_LENGTH) { "Ο κωδικός επαναφοράς πρέπει να έχει τουλάχιστον $MIN_RESTORE_PASSWORD_LENGTH χαρακτήρες." }
         restoreMutex.withLock {
-            WorkManager.getInstance(context).cancelAllWorkByTag("document-processing")
-            OcrWorker.awaitIdle()
-            val zip = context.cacheDir.resolve("backup/restore_${System.currentTimeMillis()}.zip").apply {
-                parentFile?.mkdirs()
-            }
-            try {
-                BackupCrypto.decryptToFile(context, source, zip, password.toCharArray())
-                restoreZip(zip)
-            } finally {
-                zip.delete()
+            LibraryOperationCoordinator.withExclusive {
+                WorkManager.getInstance(context).cancelAllWorkByTag("document-processing")
+                OcrWorker.awaitIdle()
+                val zip = context.cacheDir.resolve("backup/restore_${System.currentTimeMillis()}.zip").apply {
+                    parentFile?.mkdirs()
+                }
+                try {
+                    BackupCrypto.decryptToFile(context, source, zip, password.toCharArray())
+                    restoreZip(zip)
+                } finally {
+                    zip.delete()
+                }
             }
         }
     }
@@ -146,7 +151,7 @@ class BackupService(private val context: Context) {
         // an empty library may create its first key for portable restore.
         FileCrypto.ensureKeyAvailableForNewDocument(context)
         val stagingRoot = context.cacheDir.resolve("restore_documents_${UUID.randomUUID()}").apply { mkdirs() }
-        val root = context.filesDir.resolve("documents")
+        val root = DocumentStorage.root(context)
         val previousRoot = context.cacheDir.resolve("previous_documents_${UUID.randomUUID()}")
         val stagedFiles = mutableMapOf<String, File>()
         try {
@@ -395,15 +400,21 @@ class BackupService(private val context: Context) {
                 val name = validateEntryName(entry.name)
                 require(names.add(name)) { "Το αντίγραφο περιέχει διπλό αρχείο." }
                 if (!entry.isDirectory) {
-                    val data = if (name == "backup.json") input.readLimited(MAX_MANIFEST_BYTES) else null
-                    if (data != null) manifest = data.toString(Charsets.UTF_8) else input.discardLimited(MAX_BACKUP_BYTES)
-                    totalBytes += entryBytesRead
+                    val bytesRead = if (name == "backup.json") {
+                        val output = ByteArrayOutputStream()
+                        val count = input.copyLimitedTo(output, MAX_MANIFEST_BYTES)
+                        manifest = output.toByteArray().toString(Charsets.UTF_8)
+                        count
+                    } else {
+                        input.copyLimitedTo(NullOutputStream, MAX_BACKUP_BYTES)
+                    }
+                    totalBytes += bytesRead
                     require(totalBytes <= MAX_BACKUP_BYTES) { "Το αντίγραφο είναι υπερβολικά μεγάλο." }
                 }
                 input.closeEntry(); entry = input.nextEntry
             }
         }
-        return ArchiveInfo(manifest ?: error("Το αντίγραφο δεν περιέχει backup.json."), names)
+        return ArchiveInfo(manifest ?: error("Το αντίγραφο δεν περιέχει backup.json."))
     }
 
     private fun writeRestoreJournal(
@@ -471,20 +482,8 @@ class BackupService(private val context: Context) {
     private fun JSONObject.putNullable(key: String, value: String?) { put(key, value ?: JSONObject.NULL) }
     private fun JSONObject.optNullableString(key: String): String? = if (isNull(key)) null else optString(key).ifBlank { null }
 
-    private data class ArchiveInfo(val manifest: String, val names: Set<String>)
+    private data class ArchiveInfo(val manifest: String)
     private data class PageDescriptor(val documentId: String, val pageIndex: Int, val entryName: String, val ocrText: String, val sourceFileName: String, val mimeType: String)
-
-    private var entryBytesRead = 0L
-
-    private fun InputStream.readLimited(limit: Long): ByteArray {
-        val output = ByteArrayOutputStream()
-        entryBytesRead = copyLimitedTo(output, limit)
-        return output.toByteArray()
-    }
-
-    private fun InputStream.discardLimited(limit: Long) {
-        entryBytesRead = copyLimitedTo(NullOutputStream, limit)
-    }
 
     private fun InputStream.copyLimitedTo(output: OutputStream, limit: Long): Long {
         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)

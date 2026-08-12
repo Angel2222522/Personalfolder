@@ -42,7 +42,7 @@ object MetadataExtractor {
             ?: "Άλλα"
         val provider = lines.firstOrNull { line ->
             val value = foldGreek(line)
-            listOf("υπουργ", "δημ", "ααδε", "gov", "δεη", "τραπεζ", "οργανισμ").any(value::contains)
+            listOf("υπουργ", "δημος", "ααδε", "gov", "δεη", "τραπεζ", "οργανισμ").any(value::contains)
         }?.take(120).orEmpty()
 
         val dateMatches = dateRegex.findAll(normalized).mapNotNull { match ->
@@ -59,8 +59,9 @@ object MetadataExtractor {
             .filter { it.second > 0 }
             .maxWithOrNull(compareBy<Pair<DateMatch, Int>> { it.second }.thenBy { -it.first.range.first })
 
+        // An unlabelled date is not evidence of expiry. Keeping it unknown is
+        // safer than turning document order into a product assumption.
         val expiry = expiryCandidate?.first?.canonical
-            ?: if (expiryCandidate == null && dateMatches.size >= 2) dateMatches.last().canonical else null
         val expiryConfidence = when {
             expiryCandidate != null && expiryCandidate.second >= 3 -> "high"
             expiryCandidate != null -> "medium"

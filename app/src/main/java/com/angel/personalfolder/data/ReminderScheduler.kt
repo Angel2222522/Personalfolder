@@ -1,6 +1,7 @@
 package com.angel.personalfolder.data
 
 import android.content.Context
+import androidx.room.withTransaction
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
@@ -16,39 +17,23 @@ object ReminderScheduler {
     const val WORK_TAG = "document-reminders"
 
     suspend fun replaceForDocument(context: Context, documentId: String, title: String, expiry: String?) {
-        val dao = AppDatabase.get(context).reminderDao()
-        dao.getForDocument(documentId).forEach { cancel(context, it.id) }
-        dao.deleteForDocument(documentId)
-        val date = expiry?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: return
-        leadDays.forEach { lead ->
-            val reminder = ReminderEntity(
-                id = UUID.randomUUID().toString(),
-                title = "Λήξη: ${title.ifBlank { "Έγγραφο" }}",
-                dueAt = date.minusDays(lead.toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
-                documentId = documentId,
-                leadDays = lead
-            )
-            dao.insert(reminder)
-            scheduleWork(context, reminder)
-        }
+        replace(
+            context = context,
+            documentId = documentId,
+            caseId = null,
+            title = "Λήξη: ${title.ifBlank { "Έγγραφο" }}",
+            dateText = expiry
+        )
     }
 
     suspend fun replaceForCase(context: Context, caseId: String, title: String, deadline: String?) {
-        val dao = AppDatabase.get(context).reminderDao()
-        dao.getForCase(caseId).forEach { cancel(context, it.id) }
-        dao.deleteForCase(caseId)
-        val date = deadline?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: return
-        leadDays.forEach { lead ->
-            val reminder = ReminderEntity(
-                id = UUID.randomUUID().toString(),
-                title = "Προθεσμία υπόθεσης: ${title.ifBlank { "Υπόθεση" }}",
-                dueAt = date.minusDays(lead.toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
-                caseId = caseId,
-                leadDays = lead
-            )
-            dao.insert(reminder)
-            scheduleWork(context, reminder)
-        }
+        replace(
+            context = context,
+            documentId = null,
+            caseId = caseId,
+            title = "Προθεσμία υπόθεσης: ${title.ifBlank { "Υπόθεση" }}",
+            dateText = deadline
+        )
     }
 
     suspend fun removeForDocument(context: Context, documentId: String) {
@@ -81,6 +66,46 @@ object ReminderScheduler {
             .addTag("$WORK_TAG:${reminder.id}")
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork("reminder_${reminder.id}", ExistingWorkPolicy.REPLACE, request)
+    }
+
+    private suspend fun replace(
+        context: Context,
+        documentId: String?,
+        caseId: String?,
+        title: String,
+        dateText: String?
+    ) {
+        val database = AppDatabase.get(context)
+        val dao = database.reminderDao()
+        val existing = when {
+            documentId != null -> dao.getForDocument(documentId)
+            caseId != null -> dao.getForCase(caseId)
+            else -> emptyList()
+        }
+        val date = dateText?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+        val replacements = date?.let {
+            leadDays.map { lead ->
+                ReminderEntity(
+                    id = UUID.randomUUID().toString(),
+                    title = title,
+                    dueAt = it.minusDays(lead.toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+                    documentId = documentId,
+                    caseId = caseId,
+                    leadDays = lead
+                )
+            }
+        }.orEmpty()
+
+        database.withTransaction {
+            when {
+                documentId != null -> dao.deleteForDocument(documentId)
+                caseId != null -> dao.deleteForCase(caseId)
+            }
+            dao.insertAll(replacements)
+        }
+
+        existing.forEach { cancel(context, it.id) }
+        replacements.forEach { scheduleWork(context, it) }
     }
 
     private fun cancel(context: Context, id: String) {

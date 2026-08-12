@@ -26,6 +26,7 @@ import com.angel.personalfolder.processing.ScannerImageProcessor
 import com.angel.personalfolder.ui.FolderApp
 import com.angel.personalfolder.ui.FolderViewModel
 import com.angel.personalfolder.ui.PersonalFolderTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -36,7 +37,6 @@ class MainActivity : FragmentActivity() {
     private val viewModel by lazy { androidx.lifecycle.ViewModelProvider(this)[FolderViewModel::class.java] }
     private val settings by lazy { getSharedPreferences("personal_folder_settings", MODE_PRIVATE) }
     private var cameraFile: File? = null
-    private var cameraUri: Uri? = null
     private var sessionUnlocked by mutableStateOf(false)
     private var lockEnabled by mutableStateOf(false)
     private var lockPromptVisible = false
@@ -71,7 +71,6 @@ class MainActivity : FragmentActivity() {
         }
         else file?.delete()
         cameraFile = null
-        cameraUri = null
     }
 
     private val backupCreator = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
@@ -102,7 +101,6 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        lifecycleScope.launch { TempFileCleaner.recover(this@MainActivity) }
         lockEnabled = settings.getBoolean(KEY_LOCK, false)
         if (lockEnabled && !canAuthenticate()) {
             // An already-enabled lock must fail closed. Do not silently weaken the
@@ -180,8 +178,7 @@ class MainActivity : FragmentActivity() {
     private fun launchCamera() {
         val file = File(cacheDir, "camera/${System.currentTimeMillis()}.jpg").apply { parentFile?.mkdirs() }
         cameraFile = file
-        cameraUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-        cameraCapture.launch(cameraUri!!)
+        cameraCapture.launch(FileProvider.getUriForFile(this, "$packageName.fileprovider", file))
     }
 
     private fun handleIncomingIntent(incoming: Intent?) {
@@ -327,6 +324,8 @@ class MainActivity : FragmentActivity() {
                         scannerFiles = emptyList()
                     }
                 }
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
                 rawFiles.forEach(File::delete)
                 processed.forEach(File::delete)

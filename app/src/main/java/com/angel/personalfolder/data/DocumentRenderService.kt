@@ -7,6 +7,8 @@ import android.graphics.Matrix
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import androidx.exifinterface.media.ExifInterface
+import com.angel.personalfolder.processing.DocumentSourceClassifier
+import com.angel.personalfolder.security.DocumentStorage
 import com.angel.personalfolder.security.FileCrypto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -35,8 +37,6 @@ class DocumentRenderService(private val context: Context) {
         }
         result
     }
-
-    suspend fun pageCount(document: DocumentEntity): Int = logicalPages(document).size
 
     suspend fun renderPage(document: DocumentEntity, logicalPage: LogicalDocumentPage, maxDimension: Int = 1800): Bitmap =
         withContext(Dispatchers.IO) {
@@ -79,7 +79,7 @@ class DocumentRenderService(private val context: Context) {
     }
 
     private fun countPages(file: File, mimeType: String, sourceName: String, document: DocumentEntity): Int {
-        if (isPdf(mimeType, sourceName, document)) {
+        if (DocumentSourceClassifier.isPdf(mimeType, sourceName, document.mimeType)) {
             ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
                 PdfRenderer(descriptor).use { renderer ->
                     val count = renderer.pageCount.coerceAtLeast(1)
@@ -98,7 +98,7 @@ class DocumentRenderService(private val context: Context) {
         document: DocumentEntity,
         maxDimension: Int
     ): Bitmap {
-        if (isPdf(source.mimeType, source.sourceFileName, document)) {
+        if (DocumentSourceClassifier.isPdf(source.mimeType, source.sourceFileName, document.mimeType)) {
             ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
                 PdfRenderer(descriptor).use { renderer ->
                     require(sourcePageIndex in 0 until renderer.pageCount) { "Μη έγκυρος αριθμός σελίδας." }
@@ -140,15 +140,8 @@ class DocumentRenderService(private val context: Context) {
         return rotated
     }
 
-    private fun isPdf(mimeType: String, sourceName: String, document: DocumentEntity): Boolean =
-        mimeType.equals("application/pdf", ignoreCase = true) ||
-            sourceName.substringAfterLast('.', "").equals("pdf", ignoreCase = true) ||
-            (sourceName.isBlank() && document.mimeType.equals("application/pdf", ignoreCase = true))
-
     private fun isSafeDocumentFile(file: File): Boolean {
-        val root = context.filesDir.resolve("documents").canonicalFile
-        val candidate = runCatching { file.canonicalFile }.getOrNull() ?: return false
-        return candidate == root || candidate.toPath().startsWith(root.toPath())
+        return DocumentStorage.isPrivateDocumentFile(context, file)
     }
 
     private companion object { const val MAX_LOGICAL_PAGES = 1_000 }

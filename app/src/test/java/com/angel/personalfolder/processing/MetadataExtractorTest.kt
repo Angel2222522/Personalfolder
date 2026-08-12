@@ -56,9 +56,18 @@ class MetadataExtractorTest {
     }
 
     @Test
-    fun marksLastDateFallbackAsLowConfidence() {
+    fun doesNotTurnAnUnlabelledSecondDateIntoExpiry() {
         val result = MetadataExtractor.extract("Εκδόθηκε 01/01/2024\nΑναφορά 02/02/2025", "Έγγραφο")
-        assertEquals("2025-02-02", result.expiryDate)
-        assertEquals("low", result.expiryConfidence)
+        assertEquals(null, result.expiryDate)
+        assertEquals("none", result.expiryConfidence)
+    }
+
+    @Test
+    fun doesNotUseGreekRepublicHeaderAsProvider() {
+        val result = MetadataExtractor.extract(
+            "ΕΛΛΗΝΙΚΗ ΔΗΜΟΚΡΑΤΙΑ\nΥΠΟΥΡΓΕΙΟ ΠΑΙΔΕΙΑΣ ΚΑΙ ΘΡΗΣΚΕΥΜΑΤΩΝ",
+            "Έγγραφο"
+        )
+        assertEquals("ΥΠΟΥΡΓΕΙΟ ΠΑΙΔΕΙΑΣ ΚΑΙ ΘΡΗΣΚΕΥΜΑΤΩΝ", result.provider)
     }
 }

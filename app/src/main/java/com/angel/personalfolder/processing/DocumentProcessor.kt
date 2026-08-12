@@ -10,6 +10,7 @@ import androidx.exifinterface.media.ExifInterface
 import com.angel.personalfolder.data.AppDatabase
 import com.angel.personalfolder.data.DocumentEntity
 import com.angel.personalfolder.data.DocumentPageEntity
+import com.angel.personalfolder.data.LibraryOperationCoordinator
 import com.angel.personalfolder.data.ProcessingState
 import com.angel.personalfolder.data.ReminderScheduler
 import com.angel.personalfolder.security.FileCrypto
@@ -23,8 +24,12 @@ import kotlin.math.roundToInt
 
 class DocumentProcessor(private val context: Context, private val database: AppDatabase) {
     suspend fun process(documentId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        LibraryOperationCoordinator.withExclusive { processInternal(documentId) }
+    }
+
+    private suspend fun processInternal(documentId: String): Result<Unit> {
         val document = database.documentDao().getById(documentId)
-            ?: return@withContext Result.failure(IllegalArgumentException("Το έγγραφο δεν βρέθηκε."))
+            ?: return Result.failure(IllegalArgumentException("Το έγγραφο δεν βρέθηκε."))
         database.documentDao().updateProcessing(
             id = document.id,
             category = document.category,
@@ -59,7 +64,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                 val remainingCharacters = (MAX_DOCUMENT_OCR_CHARS - fullTextBuilder.length).coerceAtLeast(0)
                 val text = if (remainingCharacters == 0) {
                     ""
-                } else if (isPdf(mime, source.sourceFileName, document)) {
+                } else if (DocumentSourceClassifier.isPdf(mime, source.sourceFileName, document.mimeType)) {
                     recognizePdf(plain, ocr, remainingCharacters)
                 } else {
                     val bitmap = decodeForOcr(plain)
@@ -92,7 +97,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                     error = message,
                     updatedAt = System.currentTimeMillis()
                 )
-                return@withContext Result.failure(IllegalStateException(message))
+                return Result.failure(IllegalStateException(message))
             }
             database.documentDao().updateProcessing(
                 id = document.id,
@@ -186,11 +191,6 @@ class DocumentProcessor(private val context: Context, private val database: AppD
         if (rotated !== decoded) decoded.recycle()
         return rotated
     }
-
-    private fun isPdf(mimeType: String, sourceName: String, document: DocumentEntity): Boolean =
-        mimeType.equals("application/pdf", true) ||
-            sourceName.substringAfterLast('.', "").equals("pdf", true) ||
-            (sourceName.isBlank() && document.mimeType.equals("application/pdf", true))
 
     private companion object {
         const val OCR_MAX_SIDE = 2600
