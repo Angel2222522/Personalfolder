@@ -32,32 +32,34 @@ class BackupService(private val context: Context) {
 
     /** Repairs a restore interrupted between the filesystem swap and the Room transaction. */
     suspend fun recoverInterruptedRestore() = withContext(Dispatchers.IO) {
-        val journalFile = context.filesDir.resolve(RESTORE_JOURNAL)
-        if (!journalFile.isFile) return@withContext
-        val journal = runCatching { JSONObject(journalFile.readText(Charsets.UTF_8)) }.getOrNull()
-            ?: return@withContext
-        val root = safeJournalFile(journal.optString("root"), context.filesDir)
-        val previous = safeJournalFile(journal.optString("previousRoot"), context.cacheDir)
-        val staging = safeJournalFile(journal.optString("stagingRoot"), context.cacheDir)
-        if (root == null || previous == null || staging == null) return@withContext
-        val expectedIds = buildSet {
-            val ids = journal.optJSONArray("documentIds") ?: return@buildSet
-            for (index in 0 until ids.length()) add(ids.optString(index))
+        LibraryOperationCoordinator.withExclusive {
+            val journalFile = context.filesDir.resolve(RESTORE_JOURNAL)
+            if (!journalFile.isFile) return@withExclusive
+            val journal = runCatching { JSONObject(journalFile.readText(Charsets.UTF_8)) }.getOrNull()
+                ?: return@withExclusive
+            val root = safeJournalFile(journal.optString("root"), context.filesDir)
+            val previous = safeJournalFile(journal.optString("previousRoot"), context.cacheDir)
+            val staging = safeJournalFile(journal.optString("stagingRoot"), context.cacheDir)
+            if (root == null || previous == null || staging == null) return@withExclusive
+            val expectedIds = buildSet {
+                val ids = journal.optJSONArray("documentIds") ?: return@buildSet
+                for (index in 0 until ids.length()) add(ids.optString(index))
+            }
+            val currentIds = database.documentDao().getAll().map { it.id }.toSet()
+            val filesMatchDatabase = currentIds == expectedIds && expectedIds.all { id ->
+                root.resolve(id).isDirectory && root.resolve(id).listFiles().orEmpty().any { it.isFile }
+            }
+            val phase = journal.optString("phase")
+            if (phase == "database_committed" || (phase != "prepared" && filesMatchDatabase)) {
+                if (previous.exists()) FileCrypto.deleteRecursively(previous)
+                if (staging.exists()) FileCrypto.deleteRecursively(staging)
+            } else {
+                if (root.exists()) FileCrypto.deleteRecursively(root)
+                if (!root.exists() && previous.exists()) previous.renameTo(root)
+                if (staging.exists()) FileCrypto.deleteRecursively(staging)
+            }
+            journalFile.delete()
         }
-        val currentIds = database.documentDao().getAll().map { it.id }.toSet()
-        val filesMatchDatabase = currentIds == expectedIds && expectedIds.all { id ->
-            root.resolve(id).isDirectory && root.resolve(id).listFiles().orEmpty().any { it.isFile }
-        }
-        val phase = journal.optString("phase")
-        if (phase == "database_committed" || (phase != "prepared" && filesMatchDatabase)) {
-            if (previous.exists()) FileCrypto.deleteRecursively(previous)
-            if (staging.exists()) FileCrypto.deleteRecursively(staging)
-        } else {
-            if (root.exists()) FileCrypto.deleteRecursively(root)
-            if (!root.exists() && previous.exists()) previous.renameTo(root)
-            if (staging.exists()) FileCrypto.deleteRecursively(staging)
-        }
-        journalFile.delete()
     }
 
     suspend fun create(destination: Uri, password: String) = withContext(Dispatchers.IO) {
@@ -105,17 +107,18 @@ class BackupService(private val context: Context) {
     suspend fun restore(source: Uri, password: String) = withContext(Dispatchers.IO) {
         require(password.length >= MIN_RESTORE_PASSWORD_LENGTH) { "Ο κωδικός επαναφοράς πρέπει να έχει τουλάχιστον $MIN_RESTORE_PASSWORD_LENGTH χαρακτήρες." }
         restoreMutex.withLock {
-            LibraryOperationCoordinator.withExclusive {
+            OcrWorker.withProcessingLock {
                 WorkManager.getInstance(context).cancelAllWorkByTag("document-processing")
-                OcrWorker.awaitIdle()
-                val zip = context.cacheDir.resolve("backup/restore_${System.currentTimeMillis()}.zip").apply {
-                    parentFile?.mkdirs()
-                }
-                try {
-                    BackupCrypto.decryptToFile(context, source, zip, password.toCharArray())
-                    restoreZip(zip)
-                } finally {
-                    zip.delete()
+                LibraryOperationCoordinator.withExclusive {
+                    val zip = context.cacheDir.resolve("backup/restore_${System.currentTimeMillis()}.zip").apply {
+                        parentFile?.mkdirs()
+                    }
+                    try {
+                        BackupCrypto.decryptToFile(context, source, zip, password.toCharArray())
+                        restoreZip(zip)
+                    } finally {
+                        zip.delete()
+                    }
                 }
             }
         }
@@ -243,7 +246,7 @@ class BackupService(private val context: Context) {
                     throw error
                 }
                 if (previousMoved) FileCrypto.deleteRecursively(previousRoot)
-                ReminderScheduler.rescheduleAll(context)
+                ReminderScheduler.rescheduleAllUnlocked(context)
                 clearRestoreJournal()
             } finally {
                 if (stagingRoot.exists()) FileCrypto.deleteRecursively(stagingRoot)

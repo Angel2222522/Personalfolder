@@ -49,6 +49,12 @@ object ReminderScheduler {
     }
 
     suspend fun rescheduleAll(context: Context) {
+        LibraryOperationCoordinator.withExclusive {
+            rescheduleAllUnlocked(context)
+        }
+    }
+
+    internal suspend fun rescheduleAllUnlocked(context: Context) {
         val manager = WorkManager.getInstance(context)
         manager.cancelAllWorkByTag(WORK_TAG)
         AppDatabase.get(context).reminderDao().getAll()
