@@ -104,6 +104,7 @@ class BackupRoundTripTest {
         FileCrypto.decryptToTemp(File(restored!!.encryptedPath), plain)
         assertEquals("sensitive page", plain.readText())
         plain.delete()
+        Unit
     }
 
     @Test

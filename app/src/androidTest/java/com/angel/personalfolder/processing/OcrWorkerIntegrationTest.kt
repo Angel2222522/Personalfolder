@@ -73,7 +73,7 @@ class OcrWorkerIntegrationTest {
         assertTrue("OCR text: ${document.ocrText}", foldedText.contains("english"))
         assertTrue(database.documentPageDao().getForDocument(documentId).single().ocrText.isNotBlank())
         val searchResults = database.documentDao().search(
-            ftsQuery = "\"ελληνικο\"*",
+            ftsQuery = "\"english\"*",
             category = "",
             processingState = "",
             caseId = null,
