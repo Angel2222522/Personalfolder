@@ -45,6 +45,13 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug
 
+      - name: Upload OCR-fix debug APK early
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-folder-ocrfix-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
       - name: Run instrumentation tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
