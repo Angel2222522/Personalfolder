@@ -35,12 +35,15 @@ object ScannerImageProcessor {
             }
             working = cropped
             val enhanced = contrast(working, 1.14f)
-            output.parentFile?.mkdirs()
-            output.outputStream().use { stream ->
-                require(enhanced.compress(Bitmap.CompressFormat.JPEG, 92, stream)) { "Δεν ήταν δυνατή η αποθήκευση της σαρωμένης σελίδας." }
+            try {
+                output.parentFile?.mkdirs()
+                output.outputStream().use { stream ->
+                    require(enhanced.compress(Bitmap.CompressFormat.JPEG, 92, stream)) { "Δεν ήταν δυνατή η αποθήκευση της σαρωμένης σελίδας." }
+                }
+                return output
+            } finally {
+                if (!enhanced.isRecycled) enhanced.recycle()
             }
-            enhanced.recycle()
-            return output
         } finally {
             if (!working.isRecycled) working.recycle()
             if (!bitmap.isRecycled) bitmap.recycle()

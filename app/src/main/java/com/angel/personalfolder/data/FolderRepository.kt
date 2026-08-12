@@ -9,6 +9,7 @@ import androidx.work.BackoffPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.angel.personalfolder.security.DocumentStorage
 import com.angel.personalfolder.security.FileCrypto
 import com.angel.personalfolder.workers.OcrWorker
 import kotlinx.coroutines.Dispatchers
@@ -23,9 +24,6 @@ import android.os.ParcelFileDescriptor
 
 class FolderRepository(private val context: Context) {
     private val database = AppDatabase.get(context)
-
-    fun documents(query: String): kotlinx.coroutines.flow.Flow<List<DocumentEntity>> =
-        documents(query, "", "", null, false)
 
     fun documents(
         query: String,
@@ -49,70 +47,84 @@ class FolderRepository(private val context: Context) {
     fun checklist(caseId: String) = database.checklistDao().observeForCase(caseId)
     fun caseDocuments(caseId: String) = database.caseDocumentDao().observeDocumentsForCase(caseId)
 
-    suspend fun importUris(uris: List<Uri>): String? = importMutex.withLock { withContext(Dispatchers.IO) {
-        val distinctUris = uris.distinct()
-        if (distinctUris.isEmpty()) return@withContext null
-        require(distinctUris.size <= MAX_IMPORT_SOURCES) { "Μπορείς να εισαγάγεις έως $MAX_IMPORT_SOURCES σελίδες κάθε φορά." }
-        val id = UUID.randomUUID().toString()
-        val documentDirectory = File(context.filesDir, "documents/$id").apply { mkdirs() }
-        val pages = mutableListOf<DocumentPageEntity>()
-        val sourceCounts = mutableListOf<Int>()
-        var firstName = "Έγγραφο"
-        var firstMime = "application/octet-stream"
-        var totalBytes = 0L
-        return@withContext try {
-            distinctUris.forEachIndexed { index, uri ->
-                val name = safeDisplayName(uri) ?: "σελίδα_${index + 1}"
-                val mime = context.contentResolver.getType(uri).orEmpty().ifBlank { guessMime(name) }
-                require(mime == "application/pdf" || mime.startsWith("image/")) {
-                    "Ο τύπος αρχείου «$name» δεν υποστηρίζεται."
+    suspend fun importUris(uris: List<Uri>): String? = LibraryOperationCoordinator.withExclusive {
+        importMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val distinctUris = uris.distinct()
+                if (distinctUris.isEmpty()) return@withContext null
+                require(distinctUris.size <= MAX_IMPORT_SOURCES) {
+                    "Μπορείς να εισαγάγεις έως $MAX_IMPORT_SOURCES σελίδες κάθε φορά."
                 }
-                if (index == 0) {
-                    firstName = name.substringBeforeLast('.', name).ifBlank { "Έγγραφο" }
-                    firstMime = mime
+                val id = UUID.randomUUID().toString()
+                val documentDirectory = DocumentStorage.documentDirectory(context, id).apply { mkdirs() }
+                val pages = mutableListOf<DocumentPageEntity>()
+                val sourceCounts = mutableListOf<Int>()
+                var firstName = "Έγγραφο"
+                var firstMime = "application/octet-stream"
+                var totalBytes = 0L
+                return@withContext try {
+                    distinctUris.forEachIndexed { index, uri ->
+                        val name = safeDisplayName(uri) ?: "σελίδα_${index + 1}"
+                        val mime = context.contentResolver.getType(uri).orEmpty().ifBlank { guessMime(name) }
+                        require(mime == "application/pdf" || mime.startsWith("image/")) {
+                            "Ο τύπος αρχείου «$name» δεν υποστηρίζεται."
+                        }
+                        if (index == 0) {
+                            firstName = name.substringBeforeLast('.', name).ifBlank { "Έγγραφο" }
+                            firstMime = mime
+                        }
+                        val knownSize = querySize(uri)
+                        require(knownSize == null || knownSize <= MAX_DOCUMENT_BYTES - totalBytes) {
+                            "Το έγγραφο είναι υπερβολικά μεγάλο συνολικά."
+                        }
+                        val target = File(documentDirectory, "page_$index.pf")
+                        totalBytes += FileCrypto.encryptUri(context, uri, target)
+                        require(totalBytes <= MAX_DOCUMENT_BYTES) { "Το έγγραφο είναι υπερβολικά μεγάλο συνολικά." }
+                        val pageCount = countEncryptedSourcePages(target, mime, name)
+                        require(sourceCounts.sum() + pageCount <= MAX_LOGICAL_PAGES) {
+                            "Το έγγραφο περιέχει υπερβολικά πολλές σελίδες."
+                        }
+                        pages += DocumentPageEntity(
+                            documentId = id,
+                            pageIndex = index,
+                            encryptedPath = target.absolutePath,
+                            sourceFileName = name,
+                            mimeType = mime
+                        )
+                        sourceCounts += pageCount
+                    }
+                    require(database.documentDao().count() < MAX_DOCUMENTS) {
+                        "Η βιβλιοθήκη έχει φτάσει το όριο εγγράφων."
+                    }
+                    require(currentStorageBytes() + totalBytes <= MAX_TOTAL_STORAGE_BYTES) {
+                        "Ο ιδιωτικός χώρος εγγράφων έχει φτάσει το όριό του."
+                    }
+                    val now = System.currentTimeMillis()
+                    val logicalPageCount = sourceCounts.sum().coerceAtLeast(pages.size)
+                    database.withTransaction {
+                        database.documentDao().insert(
+                            DocumentEntity(
+                                id = id,
+                                title = firstName,
+                                originalFileName = safeDisplayName(distinctUris.first()) ?: firstName,
+                                mimeType = firstMime,
+                                encryptedPath = pages.first().encryptedPath,
+                                pageCount = logicalPageCount,
+                                createdAt = now,
+                                updatedAt = now
+                            )
+                        )
+                        database.documentPageDao().insertAll(pages)
+                    }
+                    enqueueOcr(id)
+                    id
+                } catch (error: Throwable) {
+                    FileCrypto.deleteRecursively(documentDirectory)
+                    throw error
                 }
-                val knownSize = querySize(uri)
-                require(knownSize == null || knownSize <= MAX_DOCUMENT_BYTES - totalBytes) { "Το έγγραφο είναι υπερβολικά μεγάλο συνολικά." }
-                val target = File(documentDirectory, "page_$index.pf")
-                totalBytes += FileCrypto.encryptUri(context, uri, target)
-                require(totalBytes <= MAX_DOCUMENT_BYTES) { "Το έγγραφο είναι υπερβολικά μεγάλο συνολικά." }
-                val pageCount = countEncryptedSourcePages(target, mime, name)
-                require(sourceCounts.sum() + pageCount <= MAX_LOGICAL_PAGES) { "Το έγγραφο περιέχει υπερβολικά πολλές σελίδες." }
-                pages += DocumentPageEntity(
-                    documentId = id,
-                    pageIndex = index,
-                    encryptedPath = target.absolutePath,
-                    sourceFileName = name,
-                    mimeType = mime
-                )
-                sourceCounts += pageCount
             }
-            require(database.documentDao().getAll().size < MAX_DOCUMENTS) { "Η βιβλιοθήκη έχει φτάσει το όριο εγγράφων." }
-            require(currentStorageBytes() + totalBytes <= MAX_TOTAL_STORAGE_BYTES) { "Ο ιδιωτικός χώρος εγγράφων έχει φτάσει το όριό του." }
-            val now = System.currentTimeMillis()
-            val logicalPageCount = sourceCounts.sum().coerceAtLeast(pages.size)
-            database.withTransaction {
-                database.documentDao().insert(
-                    DocumentEntity(
-                        id = id,
-                        title = firstName,
-                        originalFileName = safeDisplayName(distinctUris.first()) ?: firstName,
-                        mimeType = firstMime,
-                        encryptedPath = pages.first().encryptedPath,
-                        pageCount = logicalPageCount,
-                        createdAt = now,
-                        updatedAt = now
-                    )
-                )
-                database.documentPageDao().insertAll(pages)
-            }
-            enqueueOcr(id)
-            id
-        } catch (error: Throwable) {
-            FileCrypto.deleteRecursively(documentDirectory)
-            throw error
         }
-    } }
+    }
 
     suspend fun updateDocumentMetadata(
         id: String,
@@ -124,29 +136,33 @@ class FolderRepository(private val context: Context) {
         expiryDate: String?,
         protocolNumber: String?
     ) {
-        val cleanExpiry = expiryDate.cleanDateOrNull("Η ημερομηνία λήξης δεν είναι έγκυρη.")
-        val cleanIssued = issuedDate.cleanDateOrNull("Η ημερομηνία έκδοσης δεν είναι έγκυρη.")
-        database.documentDao().updateMetadata(
-            id = id,
-            title = title.trim().ifBlank { "Έγγραφο" },
-            category = category.trim().ifBlank { "Άλλα" },
-            tags = tags.trim(),
-            provider = provider.trim(),
-            issuedDate = cleanIssued,
-            expiryDate = cleanExpiry,
-            protocolNumber = protocolNumber?.trim()?.ifBlank { null },
-            updatedAt = System.currentTimeMillis()
-        )
-        ReminderScheduler.replaceForDocument(context, id, title.trim().ifBlank { "Έγγραφο" }, cleanExpiry)
+        LibraryOperationCoordinator.withExclusive {
+            val cleanExpiry = expiryDate.cleanDateOrNull("Η ημερομηνία λήξης δεν είναι έγκυρη.")
+            val cleanIssued = issuedDate.cleanDateOrNull("Η ημερομηνία έκδοσης δεν είναι έγκυρη.")
+            val cleanTitle = title.trim().ifBlank { "Έγγραφο" }
+            database.documentDao().updateMetadata(
+                id = id,
+                title = cleanTitle,
+                category = category.trim().ifBlank { "Άλλα" },
+                tags = tags.trim(),
+                provider = provider.trim(),
+                issuedDate = cleanIssued,
+                expiryDate = cleanExpiry,
+                protocolNumber = protocolNumber?.trim()?.ifBlank { null },
+                updatedAt = System.currentTimeMillis()
+            )
+            ReminderScheduler.replaceForDocument(context, id, cleanTitle, cleanExpiry)
+        }
     }
 
     suspend fun retryOcr(id: String) {
-        require(database.documentDao().getById(id) != null) { "Το έγγραφο δεν βρέθηκε." }
-        enqueueOcr(id)
+        LibraryOperationCoordinator.withExclusive {
+            require(database.documentDao().getById(id) != null) { "Το έγγραφο δεν βρέθηκε." }
+            enqueueOcr(id)
+        }
     }
 
-    suspend fun deleteDocument(id: String) {
-        database.documentDao().getById(id)
+    suspend fun deleteDocument(id: String) = LibraryOperationCoordinator.withExclusive {
         WorkManager.getInstance(context).cancelUniqueWork("ocr_$id")
         ReminderScheduler.removeForDocument(context, id)
         database.withTransaction {
@@ -155,7 +171,7 @@ class FolderRepository(private val context: Context) {
             database.documentPageDao().deleteForDocument(id)
             database.documentDao().deleteById(id)
         }
-        FileCrypto.deleteRecursively(context.filesDir.resolve("documents/$id"))
+        FileCrypto.deleteRecursively(DocumentStorage.documentDirectory(context, id))
     }
 
     suspend fun createCase(title: String, description: String): String =
@@ -169,23 +185,25 @@ class FolderRepository(private val context: Context) {
         nextStep: String,
         notes: String
     ): String {
-        val cleanTitle = title.trim().ifBlank { error("Η υπόθεση χρειάζεται τίτλο.") }
-        val cleanStart = startDate.cleanDateOrNull("Η ημερομηνία έναρξης δεν είναι έγκυρη.")
-        val cleanDeadline = deadline.cleanDateOrNull("Η προθεσμία δεν είναι έγκυρη.")
-        val id = UUID.randomUUID().toString()
-        val now = System.currentTimeMillis()
-        database.withTransaction {
-            database.caseDao().insert(CaseEntity(id, cleanTitle, description.trim(), startDate = cleanStart, deadline = cleanDeadline, nextStep = nextStep.trim(), notes = notes.trim(), createdAt = now, updatedAt = now))
-            database.timelineDao().insert(
-                TimelineEventEntity(
-                    id = UUID.randomUUID().toString(), caseId = id,
-                    title = "Η υπόθεση δημιουργήθηκε", eventType = "system",
-                    eventDate = LocalDate.now().toString(), createdAt = now
+        return LibraryOperationCoordinator.withExclusive {
+            val cleanTitle = title.trim().ifBlank { error("Η υπόθεση χρειάζεται τίτλο.") }
+            val cleanStart = startDate.cleanDateOrNull("Η ημερομηνία έναρξης δεν είναι έγκυρη.")
+            val cleanDeadline = deadline.cleanDateOrNull("Η προθεσμία δεν είναι έγκυρη.")
+            val id = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
+            database.withTransaction {
+                database.caseDao().insert(CaseEntity(id, cleanTitle, description.trim(), startDate = cleanStart, deadline = cleanDeadline, nextStep = nextStep.trim(), notes = notes.trim(), createdAt = now, updatedAt = now))
+                database.timelineDao().insert(
+                    TimelineEventEntity(
+                        id = UUID.randomUUID().toString(), caseId = id,
+                        title = "Η υπόθεση δημιουργήθηκε", eventType = "system",
+                        eventDate = LocalDate.now().toString(), createdAt = now
+                    )
                 )
-            )
+            }
+            ReminderScheduler.replaceForCase(context, id, cleanTitle, cleanDeadline)
+            id
         }
-        ReminderScheduler.replaceForCase(context, id, cleanTitle, cleanDeadline)
-        return id
     }
 
     suspend fun updateCase(
@@ -198,60 +216,89 @@ class FolderRepository(private val context: Context) {
         nextStep: String,
         notes: String
     ) {
-        val cleanTitle = title.trim().ifBlank { error("Η υπόθεση χρειάζεται τίτλο.") }
-        val cleanStart = startDate.cleanDateOrNull("Η ημερομηνία έναρξης δεν είναι έγκυρη.")
-        val cleanDeadline = deadline.cleanDateOrNull("Η προθεσμία δεν είναι έγκυρη.")
-        database.caseDao().update(id, cleanTitle, description.trim(), status, cleanStart, cleanDeadline, nextStep.trim(), notes.trim(), System.currentTimeMillis())
-        ReminderScheduler.replaceForCase(context, id, cleanTitle, cleanDeadline)
+        LibraryOperationCoordinator.withExclusive {
+            val cleanTitle = title.trim().ifBlank { error("Η υπόθεση χρειάζεται τίτλο.") }
+            val cleanStart = startDate.cleanDateOrNull("Η ημερομηνία έναρξης δεν είναι έγκυρη.")
+            val cleanDeadline = deadline.cleanDateOrNull("Η προθεσμία δεν είναι έγκυρη.")
+            database.caseDao().update(id, cleanTitle, description.trim(), status, cleanStart, cleanDeadline, nextStep.trim(), notes.trim(), System.currentTimeMillis())
+            ReminderScheduler.replaceForCase(context, id, cleanTitle, cleanDeadline)
+        }
     }
 
-    suspend fun deleteCase(id: String) {
+    suspend fun deleteCase(id: String) = LibraryOperationCoordinator.withExclusive {
         ReminderScheduler.removeForCase(context, id)
         database.caseDao().deleteById(id)
     }
 
     suspend fun updateCaseStatus(id: String, status: String) {
-        database.caseDao().updateStatus(id, status, System.currentTimeMillis())
-        database.timelineDao().insert(
-            TimelineEventEntity(
-                id = UUID.randomUUID().toString(), caseId = id,
-                title = "Η κατάσταση άλλαξε σε «$status»", eventType = "status",
-                eventDate = LocalDate.now().toString(), createdAt = System.currentTimeMillis()
-            )
-        )
-    }
-
-    suspend fun attachDocumentToCase(caseId: String, documentId: String) {
-        require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
-        require(database.documentDao().getById(documentId) != null) { "Το έγγραφο δεν βρέθηκε." }
-        database.caseDocumentDao().insert(CaseDocumentCrossRef(caseId, documentId))
-        database.caseDao().getById(caseId)?.let { caseEntity ->
-            database.caseDao().updateStatus(caseId, caseEntity.status, System.currentTimeMillis())
+        LibraryOperationCoordinator.withExclusive {
+            val now = System.currentTimeMillis()
+            database.withTransaction {
+                database.caseDao().updateStatus(id, status, now)
+                database.timelineDao().insert(
+                    TimelineEventEntity(
+                        id = UUID.randomUUID().toString(), caseId = id,
+                        title = "Η κατάσταση άλλαξε σε «$status»", eventType = "status",
+                        eventDate = LocalDate.now().toString(), createdAt = now
+                    )
+                )
+            }
         }
     }
 
-    suspend fun detachDocumentFromCase(caseId: String, documentId: String) = database.caseDocumentDao().delete(caseId, documentId)
+    suspend fun attachDocumentToCase(caseId: String, documentId: String) {
+        LibraryOperationCoordinator.withExclusive {
+            require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
+            require(database.documentDao().getById(documentId) != null) { "Το έγγραφο δεν βρέθηκε." }
+            database.withTransaction {
+                database.caseDocumentDao().insert(CaseDocumentCrossRef(caseId, documentId))
+                database.caseDao().getById(caseId)?.let { caseEntity ->
+                    database.caseDao().updateStatus(caseId, caseEntity.status, System.currentTimeMillis())
+                }
+            }
+        }
+    }
+
+    suspend fun detachDocumentFromCase(caseId: String, documentId: String) = LibraryOperationCoordinator.withExclusive {
+        database.caseDocumentDao().delete(caseId, documentId)
+    }
 
     suspend fun addTimelineEvent(caseId: String, title: String, note: String) {
-        require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
-        database.timelineDao().insert(
-            TimelineEventEntity(
-                id = UUID.randomUUID().toString(), caseId = caseId, title = title.trim(), note = note.trim(),
-                eventDate = LocalDate.now().toString(), createdAt = System.currentTimeMillis()
+        LibraryOperationCoordinator.withExclusive {
+            require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
+            database.timelineDao().insert(
+                TimelineEventEntity(
+                    id = UUID.randomUUID().toString(), caseId = caseId, title = title.trim(), note = note.trim(),
+                    eventDate = LocalDate.now().toString(), createdAt = System.currentTimeMillis()
+                )
             )
-        )
+        }
     }
 
     suspend fun addChecklistItem(caseId: String, title: String, linkedDocumentId: String? = null) {
-        require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
-        if (linkedDocumentId != null) require(database.documentDao().getById(linkedDocumentId) != null) { "Το έγγραφο δεν βρέθηκε." }
-        database.checklistDao().insert(ChecklistItemEntity(UUID.randomUUID().toString(), caseId, title.trim(), linkedDocumentId = linkedDocumentId, createdAt = System.currentTimeMillis()))
+        LibraryOperationCoordinator.withExclusive {
+            require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
+            if (linkedDocumentId != null) require(database.documentDao().getById(linkedDocumentId) != null) { "Το έγγραφο δεν βρέθηκε." }
+            database.checklistDao().insert(ChecklistItemEntity(UUID.randomUUID().toString(), caseId, title.trim(), linkedDocumentId = linkedDocumentId, createdAt = System.currentTimeMillis()))
+        }
     }
 
-    suspend fun setChecklistComplete(id: String, complete: Boolean) = database.checklistDao().setComplete(id, complete)
-    suspend fun linkChecklistDocument(id: String, documentId: String?) = database.checklistDao().linkDocument(id, documentId)
-    suspend fun deleteChecklistItem(id: String) = database.checklistDao().deleteById(id)
-    suspend fun markReminderDone(id: String) = database.reminderDao().markDone(id)
+    suspend fun setChecklistComplete(id: String, complete: Boolean) = LibraryOperationCoordinator.withExclusive {
+        database.checklistDao().setComplete(id, complete)
+    }
+
+    suspend fun linkChecklistDocument(id: String, documentId: String?) = LibraryOperationCoordinator.withExclusive {
+        if (documentId != null) require(database.documentDao().getById(documentId) != null) { "Το έγγραφο δεν βρέθηκε." }
+        database.checklistDao().linkDocument(id, documentId)
+    }
+
+    suspend fun deleteChecklistItem(id: String) = LibraryOperationCoordinator.withExclusive {
+        database.checklistDao().deleteById(id)
+    }
+
+    suspend fun markReminderDone(id: String) = LibraryOperationCoordinator.withExclusive {
+        database.reminderDao().markDone(id)
+    }
 
     private suspend fun enqueueOcr(id: String) {
         val request = OneTimeWorkRequestBuilder<OcrWorker>()

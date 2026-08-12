@@ -53,7 +53,7 @@ object FileCrypto {
     fun ensureKeyAvailableForNewDocument(context: Context) {
         val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         if (keyStore.getKey(KEY_ALIAS, null) is SecretKey) return
-        val documentsRoot = context.filesDir.resolve("documents")
+        val documentsRoot = DocumentStorage.root(context)
         if (containsEncryptedFile(documentsRoot)) throw KeyUnavailableException()
         key()
     }
@@ -111,9 +111,7 @@ object FileCrypto {
     }
 
     fun isPrivateDocumentFile(context: Context, file: File): Boolean {
-        val root = context.filesDir.resolve("documents").canonicalFile
-        val candidate = runCatching { file.canonicalFile }.getOrNull() ?: return false
-        return candidate != root && candidate.toPath().startsWith(root.toPath())
+        return DocumentStorage.isPrivateDocumentFile(context, file)
     }
 
     private fun InputStream.readFully(target: ByteArray) {

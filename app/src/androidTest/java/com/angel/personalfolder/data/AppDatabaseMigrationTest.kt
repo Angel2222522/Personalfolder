@@ -10,6 +10,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -31,9 +32,9 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
-    fun migratesV1ToV3WithoutLosingRowsOrRelations() = runBlocking {
+    fun migratesV1ToV4WithoutLosingRowsOrRelations() = runBlocking {
         val database = Room.databaseBuilder(context, AppDatabase::class.java, databaseName)
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
             .build()
         try {
             assertNotNull(database.documentDao().getById("doc-1"))
@@ -42,6 +43,9 @@ class AppDatabaseMigrationTest {
             assertEquals(1, database.timelineDao().getAll().size)
             assertEquals(1, database.checklistDao().getAll().size)
             assertEquals(1, database.reminderDao().getAll().size)
+            database.openHelper.readableDatabase.query(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'index_checklist_items_linkedDocumentId'"
+            ).use { cursor -> assertTrue(cursor.moveToFirst()) }
 
             database.documentDao().deleteById("doc-1")
             assertEquals(0, database.documentPageDao().getForDocument("doc-1").size)

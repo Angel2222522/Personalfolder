@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ChecklistItemEntity::class,
         ReminderEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -204,12 +204,24 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // The entity has always declared this index. Add it in a
+                // separate non-destructive migration for already-installed V2
+                // databases and for databases that came through 2 -> 3.
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_checklist_items_linkedDocumentId " +
+                        "ON checklist_items(linkedDocumentId)"
+                )
+            }
+        }
+
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java,
                 "personal_folder.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .addCallback(object : RoomDatabase.Callback() {
                     override fun onCreate(database: SupportSQLiteDatabase) {
                         createSearchIndex(database)
