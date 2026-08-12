@@ -28,6 +28,6 @@ The presence of a passing compile or lint run is not treated as proof of those f
 
 ## Latest remote verification
 
-PR run 57 (`31600158508`) completed successfully for commit `fe617e5f7019159b05b91648b5efcf83db7e4276`. Unit tests, lint, instrumentation-test compilation, debug APK build, unsigned release compilation and Room schema publication passed. Permanent signing steps were skipped because this was a pull-request run; they are only executed on a push to `main` with the permanent signing secrets.
+PR run 58 (`31600638190`) completed successfully for commit `dbae3996f1a249bef779373b59b87cf74c07ef60`. Unit tests, lint, instrumentation-test compilation, debug APK build, unsigned release compilation and Room schema publication passed. Permanent signing steps were skipped because this was a pull-request run; they are only executed on a push to `main` with the permanent signing secrets.
 
 The local workspace did not contain a Gradle wrapper and did not have a usable Gradle installation, so the commands above were verified through GitHub Actions rather than claimed as locally executed.
