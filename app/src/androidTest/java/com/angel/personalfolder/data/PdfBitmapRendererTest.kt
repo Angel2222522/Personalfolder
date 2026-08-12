@@ -24,7 +24,7 @@ class PdfBitmapRendererTest {
             val page = document.startPage(android.graphics.pdf.PdfDocument.PageInfo.Builder(600, 800, 1).create())
             // Leave the page background implicit to exercise the renderer's
             // transparent/empty-pixel handling, and draw representative text.
-            page.canvas.drawRect(120f, 300f, 480f, 380f, Paint().apply { color = Color.BLACK })
+            page.canvas.drawRect(120f, 300f, 480f, 500f, Paint().apply { color = Color.BLACK })
             page.canvas.drawText("Ελληνικό έγγραφο", 120f, 250f, Paint().apply { color = Color.BLACK; textSize = 32f })
             document.finishPage(page)
             FileOutputStream(pdf).use(document::writeTo)
