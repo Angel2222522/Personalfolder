@@ -44,7 +44,7 @@ class ExportService(private val context: Context) {
                                     put("mimeType", document.mimeType)
                                     put("pageCount", document.pageCount)
                                 })
-                            })
+                            }
                         })
                     }
                     output.putNextEntry(ZipEntry("manifest.json"))
