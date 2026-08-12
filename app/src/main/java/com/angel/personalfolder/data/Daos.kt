@@ -75,7 +75,7 @@ interface DocumentDao {
         updatedAt: Long
     )
 
-    @Query("UPDATE documents SET category = :category, ocrText = :ocrText, provider = :provider, issuedDate = :issuedDate, expiryDate = :expiryDate, protocolNumber = :protocolNumber, extractedMetadataJson = :metadataJson, processingState = :state, processingError = :error, updatedAt = :updatedAt WHERE id = :id")
+    @Query("UPDATE documents SET category = :category, ocrText = :ocrText, provider = :provider, issuedDate = :issuedDate, expiryDate = :expiryDate, expiryDateManuallyEdited = :expiryDateManuallyEdited, protocolNumber = :protocolNumber, extractedMetadataJson = :metadataJson, processingState = :state, processingError = :error, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateProcessing(
         id: String,
         category: String,
@@ -83,6 +83,7 @@ interface DocumentDao {
         provider: String,
         issuedDate: String?,
         expiryDate: String?,
+        expiryDateManuallyEdited: Boolean,
         protocolNumber: String?,
         metadataJson: String,
         state: String,
@@ -104,7 +105,7 @@ interface DocumentDao {
 
     @Query("""
         UPDATE documents SET category = :category, ocrText = :ocrText, provider = :provider,
-        issuedDate = :issuedDate, expiryDate = :expiryDate, protocolNumber = :protocolNumber,
+        issuedDate = :issuedDate, expiryDate = :expiryDate, expiryDateManuallyEdited = :expiryDateManuallyEdited, protocolNumber = :protocolNumber,
         extractedMetadataJson = :metadataJson, processingState = :state, processingError = :error,
         updatedAt = :updatedAt
         WHERE id = :id AND processingState = :expectedState
@@ -117,6 +118,7 @@ interface DocumentDao {
         provider: String,
         issuedDate: String?,
         expiryDate: String?,
+        expiryDateManuallyEdited: Boolean,
         protocolNumber: String?,
         metadataJson: String,
         state: String,
@@ -216,90 +218,3 @@ interface CaseDocumentDao {
     @Query("DELETE FROM case_documents WHERE documentId = :documentId")
     suspend fun deleteForDocument(documentId: String)
 
-    @Query("DELETE FROM case_documents")
-    suspend fun deleteAll()
-}
-
-@Dao
-interface TimelineDao {
-    @Query("SELECT * FROM timeline_events WHERE caseId = :caseId ORDER BY eventDate DESC, createdAt DESC")
-    fun observeForCase(caseId: String): Flow<List<TimelineEventEntity>>
-
-    @Query("SELECT * FROM timeline_events")
-    suspend fun getAll(): List<TimelineEventEntity>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(event: TimelineEventEntity)
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(events: List<TimelineEventEntity>)
-
-    @Query("DELETE FROM timeline_events")
-    suspend fun deleteAll()
-}
-
-@Dao
-interface ChecklistDao {
-    @Query("SELECT * FROM checklist_items WHERE caseId = :caseId ORDER BY createdAt ASC")
-    fun observeForCase(caseId: String): Flow<List<ChecklistItemEntity>>
-
-    @Query("SELECT * FROM checklist_items")
-    suspend fun getAll(): List<ChecklistItemEntity>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(item: ChecklistItemEntity)
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(items: List<ChecklistItemEntity>)
-
-    @Query("UPDATE checklist_items SET isComplete = :complete WHERE id = :id")
-    suspend fun setComplete(id: String, complete: Boolean)
-
-    @Query("UPDATE checklist_items SET linkedDocumentId = :documentId WHERE id = :id")
-    suspend fun linkDocument(id: String, documentId: String?)
-
-    @Query("DELETE FROM checklist_items WHERE id = :id")
-    suspend fun deleteById(id: String)
-
-    @Query("DELETE FROM checklist_items")
-    suspend fun deleteAll()
-}
-
-@Dao
-interface ReminderDao {
-    @Query("SELECT * FROM reminders WHERE isDone = 0 ORDER BY dueAt ASC")
-    fun observePending(): Flow<List<ReminderEntity>>
-
-    @Query("SELECT * FROM reminders")
-    suspend fun getAll(): List<ReminderEntity>
-
-    @Query("SELECT * FROM reminders WHERE id = :id LIMIT 1")
-    suspend fun getById(id: String): ReminderEntity?
-
-    @Query("SELECT * FROM reminders WHERE documentId = :documentId")
-    suspend fun getForDocument(documentId: String): List<ReminderEntity>
-
-    @Query("SELECT * FROM reminders WHERE caseId = :caseId")
-    suspend fun getForCase(caseId: String): List<ReminderEntity>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(reminder: ReminderEntity)
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(reminders: List<ReminderEntity>)
-
-    @Query("DELETE FROM reminders WHERE documentId = :documentId")
-    suspend fun deleteForDocument(documentId: String)
-
-    @Query("DELETE FROM reminders WHERE caseId = :caseId")
-    suspend fun deleteForCase(caseId: String)
-
-    @Query("DELETE FROM reminders WHERE id = :id")
-    suspend fun deleteById(id: String)
-
-    @Query("UPDATE reminders SET isDone = 1 WHERE id = :id")
-    suspend fun markDone(id: String)
-
-    @Query("DELETE FROM reminders")
-    suspend fun deleteAll()
-}

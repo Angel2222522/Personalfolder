@@ -106,6 +106,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
 
             if (fullText.isBlank()) {
                 val message = "Το OCR ολοκληρώθηκε χωρίς αναγνωρίσιμο κείμενο."
+                val expiryWasManual = MetadataMerge.isManualExpiry(latest)
                 val finalExpiry = MetadataMerge.expiryWhenOcrHasNoText(latest)
                 database.withTransaction {
                     pageResults.forEach { result ->
@@ -118,6 +119,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                         provider = latest.provider,
                         issuedDate = latest.issuedDate,
                         expiryDate = finalExpiry,
+                        expiryDateManuallyEdited = latest.expiryDateManuallyEdited || expiryWasManual,
                         protocolNumber = latest.protocolNumber,
                         metadataJson = latest.extractedMetadataJson,
                         state = ProcessingState.FAILED,
@@ -132,6 +134,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
             // This is the single value used by both the Room update and the
             // reminder scheduler. An unsafe suggestion is therefore never
             // stored under one value while being checked under another.
+            val expiryWasManual = MetadataMerge.isManualExpiry(latest)
             val finalExpiry = MetadataMerge.expiryForOcr(latest, metadata)
             database.withTransaction {
                 pageResults.forEach { result ->
@@ -144,6 +147,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                     provider = if (keepManualMetadata) latest.provider else metadata.provider,
                     issuedDate = if (keepManualMetadata) latest.issuedDate else metadata.issuedDate,
                     expiryDate = finalExpiry,
+                    expiryDateManuallyEdited = latest.expiryDateManuallyEdited || expiryWasManual,
                     protocolNumber = if (keepManualMetadata) latest.protocolNumber else metadata.protocolNumber,
                     metadataJson = metadata.json,
                     state = ProcessingState.PROCESSED,
@@ -214,95 +218,3 @@ class DocumentProcessor(private val context: Context, private val database: AppD
         }
     }
 
-    /** Mild grayscale/contrast cleanup that helps scans without destroying color text. */
-    private fun preprocessForOcr(source: Bitmap): Bitmap {
-        val result = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
-        val contrast = 1.16f
-        val offset = 128f * (1f - contrast)
-        val matrix = ColorMatrix(
-            floatArrayOf(
-                0.299f * contrast, 0.587f * contrast, 0.114f * contrast, 0f, offset,
-                0.299f * contrast, 0.587f * contrast, 0.114f * contrast, 0f, offset,
-                0.299f * contrast, 0.587f * contrast, 0.114f * contrast, 0f, offset,
-                0f, 0f, 0f, 1f, 0f
-            )
-        )
-        Canvas(result).drawBitmap(
-            source,
-            0f,
-            0f,
-            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-                colorFilter = ColorMatrixColorFilter(matrix)
-            }
-        )
-        return result
-    }
-
-    private fun decodeForOcr(file: File): Bitmap {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(file.absolutePath, bounds)
-        require(bounds.outWidth > 0 && bounds.outHeight > 0) {
-            "Δεν ήταν δυνατή η ανάγνωση της εικόνας."
-        }
-        var sample = 1
-        while (max(bounds.outWidth / sample, bounds.outHeight / sample) > OCR_MAX_SIDE) sample *= 2
-        val decoded = BitmapFactory.decodeFile(
-            file.absolutePath,
-            BitmapFactory.Options().apply {
-                inSampleSize = sample
-                inPreferredConfig = Bitmap.Config.ARGB_8888
-            }
-        ) ?: error("Δεν ήταν δυνατή η αποκωδικοποίηση της εικόνας.")
-        val rotation = runCatching { ExifInterface(file.absolutePath).rotationDegrees }.getOrDefault(0)
-        if (rotation == 0) return decoded
-        val rotated = Bitmap.createBitmap(
-            decoded,
-            0,
-            0,
-            decoded.width,
-            decoded.height,
-            Matrix().apply { postRotate(rotation.toFloat()) },
-            true
-        )
-        if (rotated !== decoded) decoded.recycle()
-        return rotated
-    }
-
-    private suspend fun markInterrupted(documentId: String, message: String) = withContext(NonCancellable) {
-        database.documentDao().updateProcessingStateIfCurrent(
-            id = documentId,
-            expectedState = ProcessingState.PROCESSING,
-            state = ProcessingState.QUEUED,
-            error = message,
-            updatedAt = System.currentTimeMillis()
-        )
-    }
-
-    private suspend fun markFailed(documentId: String, message: String) = withContext(NonCancellable) {
-        val latest = database.documentDao().getById(documentId) ?: return@withContext
-        if (latest.processingState == ProcessingState.PROCESSING) {
-            database.documentDao().updateProcessingIfCurrent(
-                id = documentId,
-                expectedState = ProcessingState.PROCESSING,
-                category = latest.category,
-                ocrText = latest.ocrText,
-                provider = latest.provider,
-                issuedDate = latest.issuedDate,
-                expiryDate = latest.expiryDate,
-                protocolNumber = latest.protocolNumber,
-                metadataJson = latest.extractedMetadataJson,
-                state = ProcessingState.FAILED,
-                error = message,
-                updatedAt = System.currentTimeMillis()
-            )
-        }
-    }
-
-    private data class PageOcr(val pageIndex: Int, val text: String)
-
-    private companion object {
-        const val OCR_MAX_SIDE = 2600
-        const val MAX_DOCUMENT_OCR_CHARS = 2_000_000
-        const val MAX_LOGICAL_PAGES = 1_000
-    }
-}
