@@ -4,11 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.room.withTransaction
-import androidx.work.ExistingWorkPolicy
-import androidx.work.BackoffPolicy
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
-import androidx.work.workDataOf
 import com.angel.personalfolder.security.DocumentStorage
 import com.angel.personalfolder.security.FileCrypto
 import com.angel.personalfolder.workers.OcrWorker
@@ -116,7 +112,16 @@ class FolderRepository(private val context: Context) {
                         )
                         database.documentPageDao().insertAll(pages)
                     }
-                    enqueueOcr(id)
+                    try {
+                        OcrWorker.enqueue(context, id)
+                    } catch (error: Throwable) {
+                        WorkManager.getInstance(context).cancelUniqueWork("ocr_$id")
+                        database.withTransaction {
+                            database.documentPageDao().deleteForDocument(id)
+                            database.documentDao().deleteById(id)
+                        }
+                        throw error
+                    }
                     id
                 } catch (error: Throwable) {
                     FileCrypto.deleteRecursively(documentDirectory)
@@ -158,7 +163,23 @@ class FolderRepository(private val context: Context) {
     suspend fun retryOcr(id: String) {
         LibraryOperationCoordinator.withExclusive {
             require(database.documentDao().getById(id) != null) { "Το έγγραφο δεν βρέθηκε." }
-            enqueueOcr(id)
+            database.documentDao().updateProcessingState(
+                id = id,
+                state = ProcessingState.QUEUED,
+                error = null,
+                updatedAt = System.currentTimeMillis()
+            )
+            try {
+                OcrWorker.enqueue(context, id)
+            } catch (error: Throwable) {
+                database.documentDao().updateProcessingState(
+                    id = id,
+                    state = ProcessingState.FAILED,
+                    error = error.message?.take(300) ?: "Δεν ήταν δυνατή η επανεκκίνηση του OCR.",
+                    updatedAt = System.currentTimeMillis()
+                )
+                throw error
+            }
         }
     }
 
@@ -298,15 +319,6 @@ class FolderRepository(private val context: Context) {
 
     suspend fun markReminderDone(id: String) = LibraryOperationCoordinator.withExclusive {
         database.reminderDao().markDone(id)
-    }
-
-    private suspend fun enqueueOcr(id: String) {
-        val request = OneTimeWorkRequestBuilder<OcrWorker>()
-            .setInputData(workDataOf(OcrWorker.KEY_DOCUMENT_ID to id))
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, java.util.concurrent.TimeUnit.SECONDS)
-            .addTag("document-processing")
-            .build()
-        WorkManager.getInstance(context).enqueueUniqueWork("ocr_$id", ExistingWorkPolicy.REPLACE, request)
     }
 
     private fun countEncryptedSourcePages(encrypted: File, mime: String, name: String): Int {

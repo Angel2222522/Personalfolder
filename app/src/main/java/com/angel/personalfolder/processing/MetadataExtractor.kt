@@ -20,7 +20,7 @@ data class ExtractedMetadata(
 object MetadataExtractor {
     private val dateRegex = Regex("""(?<!\d)(\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})(?!\d)""")
     private val protocolRegex = Regex(
-        """(?:αριθ(?:μος|μο)?\s*(?:πρωτοκολλου|αιτησης)?|αρ\.?\s*πρωτ(?:οκ)?|protocol|application)\s*[:#№-]?\s*([a-zα-ω0-9][a-zα-ω0-9./_-]{2,})"""
+        """(?:αριθ(?:μος|μο)?\s+(?:πρωτοκολλου|αιτησης|πρωτ(?:οκ)?\.?)|αρ\.?\s*πρωτ(?:οκ)?\.?|protocol(?:\s+(?:number|no))?|application(?:\s+(?:number|no))?)\s*[:#№-]?\s*([a-zα-ω0-9][a-zα-ω0-9./_-]{2,})"""
     )
 
     private val categoryRules = linkedMapOf(
@@ -69,11 +69,9 @@ object MetadataExtractor {
             else -> "none"
         }
         val issued = issuedCandidate?.first?.canonical
-            ?: dateMatches.firstOrNull { it.canonical != expiry }?.canonical
         val issuedConfidence = when {
             issuedCandidate != null && issuedCandidate.second >= 3 -> "high"
             issuedCandidate != null -> "medium"
-            issued != null -> "low"
             else -> "none"
         }
         val protocol = protocolRegex.find(folded)?.groupValues?.getOrNull(1)?.take(120)

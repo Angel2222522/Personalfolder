@@ -36,6 +36,15 @@ class MetadataExtractorTest {
     }
 
     @Test
+    fun doesNotUseRegistryLabelAsProtocolNumber() {
+        val result = MetadataExtractor.extract(
+            "ΑΡΙΘΜΟΣ ΜΗΤΡΩΟΥ: 12345\nΥΠΟΥΡΓΕΙΟ ΠΑΙΔΕΙΑΣ",
+            "Έγγραφο"
+        )
+        assertEquals(null, result.protocolNumber)
+    }
+
+    @Test
     fun scoresDateContextUsingOriginalTextPositions() {
         val result = MetadataExtractor.extract(
             "Ημερομηνία έκδοσης: 01/02/2024\nΤο έγγραφο ισχύει έως: 15-03-2025",
@@ -51,7 +60,8 @@ class MetadataExtractorTest {
     fun doesNotInventExpiryFromOneUnlabelledDate() {
         val result = MetadataExtractor.extract("Αριθμός αίτησης 12345\n03/08/2026", "Έγγραφο")
         assertEquals(null, result.expiryDate)
-        assertEquals("low", result.issuedConfidence)
+        assertEquals(null, result.issuedDate)
+        assertEquals("none", result.issuedConfidence)
         assertTrue(result.json.contains("\"expiryConfidence\":\"none\""))
     }
 

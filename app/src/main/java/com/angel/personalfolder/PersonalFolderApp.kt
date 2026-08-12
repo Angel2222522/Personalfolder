@@ -9,6 +9,7 @@ import com.angel.personalfolder.data.AppDatabase
 import com.angel.personalfolder.data.BackupService
 import com.angel.personalfolder.data.ReminderScheduler
 import com.angel.personalfolder.security.TempFileCleaner
+import com.angel.personalfolder.workers.OcrRecovery
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,6 +34,13 @@ class PersonalFolderApp : Application() {
                     android.util.Log.w(
                         "PersonalFolder",
                         "Temporary-file recovery was not completed: ${error::class.java.simpleName}"
+                    )
+                }
+            runCatching { OcrRecovery.recover(this@PersonalFolderApp) }
+                .onFailure { error ->
+                    android.util.Log.w(
+                        "PersonalFolder",
+                        "OCR recovery was not completed: ${error::class.java.simpleName}"
                     )
                 }
             runCatching { ReminderScheduler.rescheduleAll(this@PersonalFolderApp) }

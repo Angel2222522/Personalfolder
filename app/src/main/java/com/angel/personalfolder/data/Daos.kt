@@ -37,6 +37,9 @@ interface DocumentDao {
     @Query("SELECT * FROM documents WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): DocumentEntity?
 
+    @Query("SELECT * FROM documents WHERE processingState = :state")
+    suspend fun getByProcessingState(state: String): List<DocumentEntity>
+
     @Query("SELECT * FROM documents")
     suspend fun getAll(): List<DocumentEntity>
 
@@ -81,6 +84,18 @@ interface DocumentDao {
         error: String?,
         updatedAt: Long
     )
+
+    @Query("UPDATE documents SET processingState = :state, processingError = :error, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateProcessingState(id: String, state: String, error: String?, updatedAt: Long)
+
+    @Query("UPDATE documents SET processingState = :state, processingError = :error, updatedAt = :updatedAt WHERE id = :id AND processingState = :expectedState")
+    suspend fun updateProcessingStateIfCurrent(
+        id: String,
+        expectedState: String,
+        state: String,
+        error: String?,
+        updatedAt: Long
+    ): Int
 
     @Query("DELETE FROM documents WHERE id = :id")
     suspend fun deleteById(id: String)
