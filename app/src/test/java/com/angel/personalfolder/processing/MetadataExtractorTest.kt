@@ -51,16 +51,40 @@ class MetadataExtractorTest {
     fun doesNotInventExpiryFromOneUnlabelledDate() {
         val result = MetadataExtractor.extract("Αριθμός αίτησης 12345\n03/08/2026", "Έγγραφο")
         assertEquals(null, result.expiryDate)
+        assertEquals("2026-08-03", result.issuedDate)
         assertEquals("low", result.issuedConfidence)
         assertTrue(result.json.contains("\"expiryConfidence\":\"none\""))
     }
 
     @Test
-    fun marksLastDateFallbackAsLowConfidence() {
+    fun doesNotInventExpiryFromASecondUnlabelledDate() {
         val result = MetadataExtractor.extract("Εκδόθηκε 01/01/2024\nΑναφορά 02/02/2025", "Έγγραφο")
-        assertEquals("2025-02-02", result.expiryDate)
-        assertEquals("low", result.expiryConfidence)
-        assertTrue(result.json.contains("fallback:last-date"))
+        assertEquals("2024-01-01", result.issuedDate)
+        assertEquals(null, result.expiryDate)
+        assertEquals("none", result.expiryConfidence)
+        assertTrue(result.json.contains("\"expiryProvenance\":\"none\""))
+    }
+
+    @Test
+    fun doesNotReuseIssuedDateAsExpiryWhenValidityWordsAreNearby() {
+        val result = MetadataExtractor.extract(
+            "Ημερομηνία έκδοσης: 03/08/2026\nΗ παρούσα βεβαίωση ισχύει για κάθε νόμιμη χρήση.",
+            "Έγγραφο"
+        )
+        assertEquals("2026-08-03", result.issuedDate)
+        assertEquals(null, result.expiryDate)
+        assertEquals("none", result.expiryConfidence)
+    }
+
+    @Test
+    fun recognizesCreationDateWithoutInventingExpiry() {
+        val result = MetadataExtractor.extract(
+            "Ημερομηνία δημιουργίας: 03/08/2026\nΗ παρούσα βεβαίωση ισχύει για κάθε νόμιμη χρήση.",
+            "Έγγραφο"
+        )
+        assertEquals("2026-08-03", result.issuedDate)
+        assertEquals("high", result.issuedConfidence)
+        assertEquals(null, result.expiryDate)
     }
 
     @Test
