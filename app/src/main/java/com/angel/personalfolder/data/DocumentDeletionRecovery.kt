@@ -37,13 +37,13 @@ object DocumentDeletionRecovery {
     suspend fun recover(context: Context, database: AppDatabase) = withContext(Dispatchers.IO) {
         DataOperationCoordinator.withExclusiveDuringStartup {
             val journalFile = context.filesDir.resolve(JOURNAL_FILE)
-            if (!journalFile.isFile) return@withExclusive
+            if (!journalFile.isFile) return@withExclusiveDuringStartup
             val journal = runCatching { JSONObject(journalFile.readText(Charsets.UTF_8)) }.getOrNull()
-                ?: return@withExclusive
+                ?: return@withExclusiveDuringStartup
             val documentId = journal.optString("documentId")
             val root = safePath(journal.optString("root"), context.filesDir.resolve("documents"))
             val quarantine = safePath(journal.optString("quarantine"), context.cacheDir)
-            if (documentId.isBlank() || root == null || quarantine == null) return@withExclusive
+            if (documentId.isBlank() || root == null || quarantine == null) return@withExclusiveDuringStartup
 
             val stillInDatabase = database.documentDao().getById(documentId) != null
             val phase = journal.optString("phase")

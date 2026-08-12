@@ -31,13 +31,13 @@ class BackupService(private val context: Context) {
     suspend fun recoverInterruptedRestore() = withContext(Dispatchers.IO) {
         DataOperationCoordinator.withExclusiveDuringStartup {
             val journalFile = context.filesDir.resolve(RESTORE_JOURNAL)
-            if (!journalFile.isFile) return@withExclusive
+            if (!journalFile.isFile) return@withExclusiveDuringStartup
             val journal = runCatching { JSONObject(journalFile.readText(Charsets.UTF_8)) }.getOrNull()
-                ?: return@withExclusive
+                ?: return@withExclusiveDuringStartup
             val root = safeJournalFile(journal.optString("root"), context.filesDir.resolve("documents"))
             val previous = safeJournalFile(journal.optString("previousRoot"), context.cacheDir)
             val staging = safeJournalFile(journal.optString("stagingRoot"), context.cacheDir)
-            if (root == null || previous == null || staging == null) return@withExclusive
+            if (root == null || previous == null || staging == null) return@withExclusiveDuringStartup
             val expectedIds = buildSet {
                 val ids = journal.optJSONArray("documentIds") ?: return@buildSet
                 for (index in 0 until ids.length()) add(ids.optString(index))
