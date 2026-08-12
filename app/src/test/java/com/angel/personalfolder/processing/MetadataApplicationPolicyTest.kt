@@ -19,14 +19,14 @@ class MetadataApplicationPolicyTest {
     )
 
     @Test
-    fun lowConfidenceExpiryIsStoredOnlyAsSuggestion() {
+    fun unlabelledDatesDoNotCreateExpiryOrSuggestion() {
         val metadata = MetadataExtractor.extract("Εκδόθηκε 01/01/2024\nΑναφορά 02/02/2025", "fallback")
 
         val updated = MetadataApplicationPolicy.apply(baseDocument, metadata)
 
         assertNull(updated.expiryDate)
-        assertEquals("2025-02-02", updated.expiryDateSuggestion)
-        assertEquals(MetadataConfidence.LOW, updated.expiryDateSuggestionConfidence)
+        assertNull(updated.expiryDateSuggestion)
+        assertEquals(MetadataConfidence.NONE, updated.expiryDateSuggestionConfidence)
     }
 
     @Test
