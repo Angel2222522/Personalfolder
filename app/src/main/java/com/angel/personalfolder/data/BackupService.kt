@@ -69,9 +69,12 @@ class BackupService(private val context: Context) {
             try {
                 val payload = snapshot()
                 ZipOutputStream(FileOutputStream(zip)).use { output ->
+                    val manifestBytes = payload.toString().toByteArray(Charsets.UTF_8)
+                    require(manifestBytes.size.toLong() <= MAX_BACKUP_BYTES) { "Το αντίγραφο είναι υπερβολικά μεγάλο." }
                     output.putNextEntry(ZipEntry("backup.json"))
-                    output.write(payload.toString().toByteArray(Charsets.UTF_8))
+                    output.write(manifestBytes)
                     output.closeEntry()
+                    var archiveBytes = manifestBytes.size.toLong()
                     val pages = database.documentPageDao().getAll().distinctBy { it.documentId to it.pageIndex }
                     pages.forEach { page ->
                         val source = File(page.encryptedPath)
@@ -81,7 +84,10 @@ class BackupService(private val context: Context) {
                         try {
                             FileCrypto.decryptToTemp(source, plain)
                             output.putNextEntry(ZipEntry("files/${page.documentId}/${page.pageIndex}.pf"))
-                            FileInputStream(plain).use { it.copyLimitedTo(output, MAX_BACKUP_BYTES) }
+                            val copied = FileInputStream(plain).use {
+                                it.copyLimitedTo(output, MAX_BACKUP_BYTES - archiveBytes)
+                            }
+                            archiveBytes += copied
                             output.closeEntry()
                         } finally {
                             plain.delete()
@@ -264,13 +270,17 @@ class BackupService(private val context: Context) {
             val documentPages = pages.filter { it.documentId == id }
             require(documentPages.isNotEmpty()) { "Το έγγραφο δεν έχει σελίδες." }
             require(documentPages.all { it.entryName in stagedFiles }) { "Λείπει αρχείο από το έγγραφο." }
+            val pageCount = item.optInt("pageCount", documentPages.size)
+            require(pageCount in documentPages.size..MAX_RESTORED_PAGES) {
+                "Το αντίγραφο περιέχει μη έγκυρο αριθμό σελίδων."
+            }
             result += DocumentEntity(
                 id = id,
                 title = item.getString("title").take(200),
                 originalFileName = item.getString("originalFileName").take(200),
                 mimeType = item.getString("mimeType").take(120),
                 encryptedPath = root.resolve("$id/page_${documentPages.minOf { it.pageIndex }}.pf").absolutePath,
-                pageCount = item.optInt("pageCount", documentPages.size).coerceAtLeast(documentPages.size),
+                pageCount = pageCount,
                 category = item.optString("category", "Άλλα").take(120),
                 tags = item.optString("tags").take(500),
                 provider = item.optString("provider").take(200),

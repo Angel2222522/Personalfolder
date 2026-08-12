@@ -14,5 +14,5 @@ import kotlinx.coroutines.sync.withLock
 object LibraryOperationCoordinator {
     private val mutex = Mutex()
 
-    suspend fun <T> withExclusive(block: suspend () -> T): T = mutex.withLock(block)
+    suspend fun <T> withExclusive(block: suspend () -> T): T = mutex.withLock { block() }
 }

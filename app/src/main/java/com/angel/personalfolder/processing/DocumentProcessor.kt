@@ -44,7 +44,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
             updatedAt = System.currentTimeMillis()
         )
         val temporaryFiles = mutableListOf<File>()
-        try {
+        return try {
             val pageRows = database.documentPageDao().getForDocument(document.id).sortedBy { it.pageIndex }
             val sources = if (pageRows.isEmpty()) {
                 listOf(DocumentPageEntity(document.id, 0, document.encryptedPath, sourceFileName = document.originalFileName, mimeType = document.mimeType))

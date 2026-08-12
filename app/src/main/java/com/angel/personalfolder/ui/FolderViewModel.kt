@@ -71,8 +71,15 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
         } catch (error: Throwable) {
             _message.emit(error.message ?: "Δεν ήταν δυνατή η εισαγωγή.")
         } finally {
-            runCatching { onFinished() }
-            endOperation()
+            try {
+                onFinished()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                _message.tryEmit(error.message ?: "Ο καθαρισμός της εισαγωγής δεν ολοκληρώθηκε.")
+            } finally {
+                endOperation()
+            }
         }
     }
 
