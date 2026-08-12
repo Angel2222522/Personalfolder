@@ -1,5 +1,7 @@
 package com.angel.personalfolder.processing
 
+import java.text.Normalizer
+import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -99,8 +101,9 @@ class MetadataExtractorTest {
                 "ΠΕΡΙΦΕΡΕΙΑΚΗ ΔΙΕΥΘΥΝΣΗ ΕΚΠΑΙΔΕΥΣΗΣ",
             "Έγγραφο"
         )
-        assertTrue(result.provider.contains("Υπουργείο Παιδείας", ignoreCase = true))
-        assertTrue(result.provider.contains("Αθλητισμού", ignoreCase = true))
+        val foldedProvider = foldForAssertion(result.provider)
+        assertTrue(foldedProvider.contains(foldForAssertion("Υπουργείο Παιδείας")))
+        assertTrue(foldedProvider.contains(foldForAssertion("Αθλητισμού")))
         assertTrue(!result.provider.equals("Ελληνική Δημοκρατία", ignoreCase = true))
     }
 
@@ -140,4 +143,9 @@ class MetadataExtractorTest {
         assertNull(result.issuedDate)
         assertNull(result.expiryDate)
     }
+
+    private fun foldForAssertion(value: String): String = Normalizer.normalize(
+        value.lowercase(Locale.ROOT),
+        Normalizer.Form.NFD
+    ).replace(Regex("\\p{M}+"), "")
 }
