@@ -86,33 +86,34 @@ object MetadataExtractor {
 
         val dateMatches = dateRegex.findAll(normalized).mapNotNull { match ->
             normalizeDate(match.value)?.let { canonical ->
-                DateMatch(canonical, match.range, contextAround(normalized, match.range))
+                DateMatch(canonical, match.range, contextForDate(normalized, match.range))
             }
         }.toList()
-        val expiryCandidate = dateMatches
-            .map { it to expiryScore(it.context) }
-            .filter { it.second > 0 }
-            .maxWithOrNull(compareBy<Pair<DateMatch, Int>> { it.second }.thenBy { it.first.range.first })
         val issuedCandidate = dateMatches
             .map { it to issuedScore(it.context) }
             .filter { it.second > 0 }
             .maxWithOrNull(compareBy<Pair<DateMatch, Int>> { it.second }.thenBy { -it.first.range.first })
+        val expiryCandidate = dateMatches
+            .filter { it.range != issuedCandidate?.first?.range }
+            .map { it to expiryScore(it.context) }
+            .filter { it.second >= STRONG_EXPIRY_SCORE }
+            .maxWithOrNull(compareBy<Pair<DateMatch, Int>> { it.second }.thenBy { it.first.range.first })
 
+        // Expiry is a deadline, not a generic date guess. Never invent it from
+        // the last date in the document and never reuse the same OCR occurrence
+        // that was already identified as the issue/creation date.
         val expiry = expiryCandidate?.first?.canonical
-            ?: if (expiryCandidate == null && dateMatches.size >= 2) dateMatches.last().canonical else null
         val expiryConfidence = when {
-            expiryCandidate != null && expiryCandidate.second >= 4 -> MetadataConfidence.HIGH
-            expiryCandidate != null -> MetadataConfidence.MEDIUM
-            expiry != null -> MetadataConfidence.LOW
+            expiryCandidate != null && expiryCandidate.second >= STRONG_EXPIRY_SCORE -> MetadataConfidence.HIGH
             else -> MetadataConfidence.NONE
         }
-        val expiryProvenance = when {
-            expiryCandidate != null -> "expiry-label:${expiryCandidate.second}"
-            expiry != null -> "fallback:last-date"
-            else -> "none"
+        val expiryProvenance = if (expiryCandidate != null) {
+            "expiry-label:${expiryCandidate.second}"
+        } else {
+            "none"
         }
         val issued = issuedCandidate?.first?.canonical
-            ?: dateMatches.firstOrNull { it.canonical != expiry }?.canonical
+            ?: dateMatches.firstOrNull { it.range != expiryCandidate?.first?.range }?.canonical
         val issuedConfidence = when {
             issuedCandidate != null && issuedCandidate.second >= 4 -> MetadataConfidence.HIGH
             issuedCandidate != null -> MetadataConfidence.MEDIUM
@@ -193,7 +194,8 @@ object MetadataExtractor {
         val value = foldGreek(context)
         return when {
             listOf("ημερομηνια ληξης", "ημ ληξης", "expiry", "expires", "expiration").any(value::contains) -> 4
-            listOf("ισχυει εως", "valid until").any(value::contains) -> 4
+            listOf("ισχυει εως", "ισχυς εως", "valid until", "valid through").any(value::contains) -> 4
+            listOf("ληξη", "ληγει").any(value::contains) -> 4
             listOf("ληξ", "εως", "μεχρι", "ισχυει", "valid").any(value::contains) -> 3
             else -> 0
         }
@@ -203,6 +205,7 @@ object MetadataExtractor {
         val value = foldGreek(context)
         return when {
             listOf("ημερομηνια εκδοσης", "ημ εκδοσης", "issued", "issue date").any(value::contains) -> 4
+            listOf("ημερομηνια δημιουργιας", "creation date", "created on").any(value::contains) -> 4
             listOf("εκδοθ", "εκδοση", "αποφαση", "dated").any(value::contains) -> 3
             else -> 0
         }
@@ -215,10 +218,23 @@ object MetadataExtractor {
         }
     }
 
-    private fun contextAround(text: String, range: IntRange): String = text.substring(
-        (range.first - CONTEXT_RADIUS).coerceAtLeast(0),
-        (range.last + 1 + CONTEXT_RADIUS).coerceAtMost(text.length)
-    )
+    /**
+     * Date labels are local. Looking dozens of characters after a date allowed
+     * a later sentence such as "ισχύει ..." to incorrectly relabel the earlier
+     * issue date as an expiry. Use the current line, plus the previous line only
+     * when the date starts a line and the OCR may have split label from value.
+     */
+    private fun contextForDate(text: String, range: IntRange): String {
+        val lineStart = text.lastIndexOf('\n', (range.first - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
+        val lineEnd = text.indexOf('\n', range.last + 1).let { if (it < 0) text.length else it }
+        val currentLine = text.substring(lineStart, lineEnd)
+        val offsetInLine = (range.first - lineStart).coerceIn(0, currentLine.length)
+        if (currentLine.substring(0, offsetInLine).isNotBlank() || lineStart == 0) return currentLine
+
+        val previousLineEnd = (lineStart - 1).coerceAtLeast(0)
+        val previousLineStart = text.lastIndexOf('\n', (previousLineEnd - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
+        return text.substring(previousLineStart, lineEnd)
+    }
 
     private fun jsonValue(value: String?): String = value?.let { "\"${jsonEscape(it)}\"" } ?: "null"
 
@@ -257,5 +273,5 @@ object MetadataExtractor {
     private data class ProviderCandidate(val value: String, val score: Int, val index: Int)
     private data class DateMatch(val canonical: String, val range: IntRange, val context: String)
 
-    private const val CONTEXT_RADIUS = 80
+    private const val STRONG_EXPIRY_SCORE = 4
 }
