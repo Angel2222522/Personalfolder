@@ -192,7 +192,8 @@ object MetadataExtractor {
         val value = foldGreek(context)
         return when {
             listOf("ημερομηνια ληξης", "ημ ληξης", "expiry", "expires", "expiration").any(value::contains) -> 4
-            listOf("ληξ", "εως", "μεχρι", "ισχυει", "valid until", "valid").any(value::contains) -> 3
+            listOf("ισχυει εως", "valid until").any(value::contains) -> 4
+            listOf("ληξ", "εως", "μεχρι", "ισχυει", "valid").any(value::contains) -> 3
             else -> 0
         }
     }
