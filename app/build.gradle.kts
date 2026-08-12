@@ -1,8 +1,83 @@
+import java.io.File
+import java.net.URI
+import java.security.MessageDigest
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.kapt")
+}
+
+data class OcrModel(
+    val name: String,
+    val size: Long,
+    val gitBlobSha1: String
+)
+
+fun gitBlobSha1(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-1")
+    digest.update("blob ${file.length()}\u0000".toByteArray(Charsets.UTF_8))
+    file.inputStream().use { input ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val read = input.read(buffer)
+            if (read <= 0) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+}
+
+val tesseractDataCommit = "87416418657359cb625c412a48b6e1d6d41c29bd"
+val ocrModels = listOf(
+    OcrModel("ell.traineddata", 1_419_514L, "ed98ae1a88d84414da316e6eeab3232f2c68639b"),
+    OcrModel("eng.traineddata", 4_113_088L, "bbef4675053b5b468cdb477053e28b1c698ba08e")
+)
+val generatedOcrAssetsDir = layout.buildDirectory.dir("generated/ocrAssets")
+
+val prepareOcrModels = tasks.register("prepareOcrModels") {
+    doLast {
+        val tessdata = generatedOcrAssetsDir.get().asFile.resolve("tessdata").apply { mkdirs() }
+        for (model in ocrModels) {
+            val destination = File(tessdata, model.name)
+            if (
+                destination.isFile &&
+                destination.length() == model.size &&
+                gitBlobSha1(destination) == model.gitBlobSha1
+            ) {
+                continue
+            }
+
+            val temporary = File(tessdata, ".${model.name}.part")
+            temporary.delete()
+            val url = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/$tesseractDataCommit/${model.name}"
+            val connection = URI(url).toURL().openConnection().apply {
+                connectTimeout = 30_000
+                readTimeout = 60_000
+                setRequestProperty("User-Agent", "PersonalFolder-Gradle")
+            }
+            try {
+                connection.getInputStream().use { input ->
+                    temporary.outputStream().use { output -> input.copyTo(output) }
+                }
+                check(temporary.length() == model.size) {
+                    "Unexpected OCR model size for ${model.name}: ${temporary.length()}"
+                }
+                check(gitBlobSha1(temporary) == model.gitBlobSha1) {
+                    "OCR model checksum mismatch for ${model.name}"
+                }
+                if (destination.exists()) check(destination.delete()) {
+                    "Could not replace ${model.name}"
+                }
+                check(temporary.renameTo(destination)) {
+                    "Could not install ${model.name}"
+                }
+            } finally {
+                temporary.delete()
+            }
+        }
+    }
 }
 
 val releaseKeystorePath = System.getenv("PERSONAL_FOLDER_KEYSTORE_PATH")
@@ -41,6 +116,11 @@ android {
     }
 
     sourceSets {
+        getByName("main") {
+            // Ignore the previously committed broken model files. The build uses only
+            // pinned, checksum-verified official Tesseract models generated above.
+            assets.setSrcDirs(listOf(generatedOcrAssetsDir.get().asFile))
+        }
         getByName("androidTest") {
             assets.srcDir("$projectDir/schemas")
         }
@@ -70,8 +150,9 @@ android {
             )
         }
         debug {
-            applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
+            // Intentionally install as a separate app for this OCR-fix build.
+            applicationIdSuffix = ".ocrfix"
+            versionNameSuffix = "-ocrfix"
         }
     }
 
@@ -96,6 +177,12 @@ android {
     lint {
         abortOnError = true
         warningsAsErrors = false
+    }
+}
+
+tasks.configureEach {
+    if (name.startsWith("merge") && name.endsWith("Assets")) {
+        dependsOn(prepareOcrModels)
     }
 }
 
