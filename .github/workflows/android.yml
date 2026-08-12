@@ -55,13 +55,7 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_2
-          script: |
-            set +e
-            gradle connectedDebugAndroidTest --stacktrace --info
-            status=$?
-            mkdir -p app/build/outputs/logs
-            adb logcat -d -v threadtime > app/build/outputs/logs/emulator-logcat.txt || true
-            exit "$status"
+          script: gradle connectedDebugAndroidTest --stacktrace --info
 
       - name: Upload Android instrumentation diagnostics
         if: always()
@@ -71,7 +65,6 @@ jobs:
           path: |
             app/build/reports/androidTests/connected/**
             app/build/outputs/androidTest-results/**
-            app/build/outputs/logs/**
           if-no-files-found: ignore
 
       - name: Build debug APK
