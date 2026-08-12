@@ -29,4 +29,6 @@ The presence of a passing compile or lint run is not treated as proof of those f
 
 ## Latest remote verification
 
-The remediation branch has been published for a fresh CI run. This section is updated only from the actual workflow result; local source inspection or APK compilation is not treated as runtime verification.
+Workflow run **#87** (`31636678409`) on remediation commit `840275e956a250305d50d4075fe9f730a7682cbe` passed. The job passed unit tests, lint, instrumentation compilation, debug APK build, emulator instrumentation, pull-request release compilation and Room schema upload.
+
+The emulator XML report records 11 tests with 0 failures, 0 errors and 0 skipped: 2 migration tests, 4 backup/restore tests, 2 PDF bitmap tests, 2 original-PDF/multi-page tests and 1 Android Keystore state test. Run #86 was red only because the emulator runner's multiline shell handling discarded the captured Gradle exit status after a successful 11/11 test run; the workflow was corrected and #87 is green. This is the actual remote runtime result; local source inspection or APK compilation alone is not treated as runtime verification.

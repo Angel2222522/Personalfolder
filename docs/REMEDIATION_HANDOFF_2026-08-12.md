@@ -24,11 +24,37 @@ The original encrypted document bytes remain under `filesDir/documents/<document
 
 Restore now stages and validates files before the Room replacement transaction. A durable journal records the generation boundary. If a process stops before the database commit and a previous generation is proven, the old generation is restored. If there is no previous generation, the replacement is preserved for evidence-based recovery rather than deleting the only available copy. A fresh empty installation materialises an empty previous generation so a failed first restore can roll back without leaving Room and filesystem generations split.
 
-## Verification status at handoff
+## Part 1 closure verification
 
-Local machine limitations: this workspace does not contain the Android SDK, Gradle wrapper or Kotlin compiler, so Android verification is performed through the repository GitHub Actions workflow. The CI workflow has been changed to run unit tests, lint, debug build, instrumentation compilation, emulator instrumentation tests, and PR release compilation. Permanent signing and signed release artifact verification are intentionally restricted to a push on `main` with the existing four signing secrets.
+Local machine limitations: this workspace does not contain the Android SDK, Gradle wrapper or Kotlin compiler, so Android verification was performed through the repository GitHub Actions workflow.
 
-The first fresh CI run reached unit-test execution after the Kotlin compiler fixes. It exposed and led to a correction in the expiry confidence rule: explicit `Ισχύει έως` is high-confidence contextual evidence, while an unlabelled last date remains low-confidence. A newer CI run must be checked before Part 1 is declared closed.
+The exact passing verification is GitHub Actions workflow run **#87**, run id `31636678409`, on commit `840275e956a250305d50d4075fe9f730a7682cbe` of `codex/personal-folder-remediation`:
+
+- `gradle testDebugUnitTest`: passed;
+- `gradle lintDebug`: passed;
+- `gradle assembleDebugAndroidTest`: passed;
+- `gradle assembleDebug`: passed;
+- emulator `connectedDebugAndroidTest`: passed, **11 tests, 0 failures, 0 errors, 0 skipped**;
+- `gradle assembleRelease` for the pull request: passed;
+- Room schema artifact upload: passed.
+
+The emulator report groups the 11 passing tests as follows:
+
+- Room migration and orphan-data protection: 2/2;
+- encrypted backup/restore, password and corruption/size-boundary coverage: 4/4;
+- PDF bitmap rendering and opaque white/dark-content behavior: 2/2;
+- original single-PDF bytes and multi-page ordering: 2/2;
+- Android Keystore picker-boundary state: 1/1.
+
+The preceding run #86 was red for a CI wrapper defect, not an application test failure: its Gradle output was `BUILD SUCCESSFUL` and the device report was 11/11 with 0 failures, but the emulator action executed each multiline script line in a separate shell and lost the saved exit status. Commit `840275e956a250305d50d4075fe9f730a7682cbe` keeps status capture, diagnostics and the final exit in one shell. Run #87 then passed the complete job without bypassing instrumentation tests.
+
+The PDF end-to-end path is now covered in source and regression tests: imported PDF bytes are encrypted and retained; PDF pages are decoded through `PdfRenderer` and image pages through `BitmapFactory`; the viewer receives an opaque white-background bitmap without OCR filters; OCR renders its own independent bitmap and sends that to Tesseract; original PDF bytes are used for external open/share of a single PDF; and multi-page PDF ordering is preserved. Images and PDFs therefore do not share an unsafe decoder path.
+
+### Γιατί σκοτείνιαζε το PDF
+
+Το PDF δεν αλλοιωνόταν μέσα στην αποθήκευση. Το πρόβλημα ήταν η bitmap που δινόταν στο `PdfRenderer`: ξεκινούσε χωρίς ρητά ορισμένο λευκό, αδιαφανές φόντο. Σε σελίδες με λευκό υπόβαθρο, τα διαφανή/μη αρχικοποιημένα pixels μπορούσαν να εμφανιστούν μαύρα στον viewer ή να δώσουν κακή είσοδο στο OCR. Η διόρθωση γεμίζει πρώτα bitmap ARGB με λευκό, κάνει το render και παράγει αδιαφανές αντίγραφο. Ο viewer και το OCR χρησιμοποιούν χωριστά bitmap, ενώ το αρχικό PDF παραμένει byte-for-byte ίδιο.
+
+Permanent signing and signed release artifact verification remain intentionally restricted to a push on `main` with the existing four signing secrets. They are not required to close Part 1 and are not claimed here.
 
 ## Part 2 work still required
 
