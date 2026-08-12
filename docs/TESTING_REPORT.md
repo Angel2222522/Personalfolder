@@ -3,8 +3,10 @@
 ## Automated coverage added
 
 - `MetadataExtractorTest`: Greek/English-compatible protocol/date parsing, original-text date context, confidence for labeled and fallback dates, empty input and JSON escaping.
-- `AppDatabaseMigrationTest` (instrumentation): constructs a V1 schema, migrates through 1→2→3, verifies documents/pages/cases/relations/checklist/timeline/reminders, and verifies cascade/SET NULL behavior.
+- `AppDatabaseMigrationTest` (instrumentation): constructs a V1 schema, migrates through 1→2→3→4, verifies documents/pages/cases/relations/checklist/timeline/reminders, and verifies the linked-document index plus cascade/SET NULL behavior.
 - `BackupRoundTripTest` (instrumentation): AES-GCM password round-trip, wrong-password rejection, portable backup restore preserving page bytes/OCR, and corrupted-backup rejection.
+- `DocumentSourceClassifierTest`: keeps PDF classification rules consistent for MIME-only, filename-only and image sources.
+- `LibraryOperationCoordinatorTest`: verifies that filesystem/database replacement operations are serialized rather than overlapping.
 - CI compiles the instrumentation source and runs unit tests, lint, debug build, debug androidTest build and release build verification.
 - Standard baseline security scan: 9 source-backed V1 findings (7 medium, 2 low), with remediation status reviewed against the V2 source. It is explicitly a pre-V2 scan, not a claim that the final commit was independently rescanned.
 
@@ -24,6 +26,8 @@ Camera permission and multi-page capture, SAF providers from several document ap
 
 The presence of a passing compile or lint run is not treated as proof of those flows. The final handoff should record the CI run and separately identify any physical-device scenarios not executed.
 
-## Latest remote verification
+## Latest code verification
 
-Run 29 (`31523947009`) passed unit tests, lint, instrumentation compilation, debug APK build, release build verification and artifact publication for commit `18487d173f8af938dc62c41e88302a7119abbc79`. The published debug APK artifact is `9114272155`; release verification artifact is `9114273533`; Room schemas artifact is `9114274107`.
+PR run 59 (`31601137868`) completed successfully for commit `566ecfe9d266b6d5e99cc18bc47e011d7c86a47a`. Unit tests, lint, instrumentation-test compilation, debug APK build, unsigned release compilation and Room schema publication passed. Permanent signing steps were skipped because this was a pull-request run; they are only executed on a push to `main` with the permanent signing secrets. The follow-up commit that updates this report changes documentation only; the application source and tests are unchanged.
+
+The local workspace did not contain a Gradle wrapper and did not have a usable Gradle installation, so the commands above were verified through GitHub Actions rather than claimed as locally executed.

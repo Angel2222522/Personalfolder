@@ -5,7 +5,6 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.angel.personalfolder.data.CaseEntity
-import com.angel.personalfolder.data.CaseStatus
 import com.angel.personalfolder.data.ChecklistItemEntity
 import com.angel.personalfolder.data.DocumentEntity
 import com.angel.personalfolder.data.BackupService
@@ -20,7 +19,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 class FolderViewModel(application: Application) : AndroidViewModel(application) {
@@ -47,8 +49,10 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val pendingReminders = repository.pendingReminders()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    private val _busy = MutableStateFlow(false)
-    val busy: StateFlow<Boolean> = _busy.asStateFlow()
+    private val _activeOperations = MutableStateFlow(0)
+    val busy: StateFlow<Boolean> = _activeOperations
+        .map { it > 0 }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     private val _message = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages = _message.asSharedFlow()
 
@@ -59,96 +63,101 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     fun setExpiringSoon(value: Boolean) { _expiringSoon.value = value }
 
     fun importUris(uris: List<Uri>, onFinished: () -> Unit = {}) = viewModelScope.launch {
-        _busy.value = true
-        runCatching { repository.importUris(uris) }
-            .onSuccess { if (it != null) _message.emit("Το έγγραφο εισήχθη και επεξεργάζεται τοπικά.") }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η εισαγωγή.") }
-        _busy.value = false
-        runCatching { onFinished() }
+        beginOperation()
+        try {
+            repository.importUris(uris)?.let { _message.emit("Το έγγραφο εισήχθη και επεξεργάζεται τοπικά.") }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            _message.emit(error.message ?: "Δεν ήταν δυνατή η εισαγωγή.")
+        } finally {
+            try {
+                onFinished()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                _message.tryEmit(error.message ?: "Ο καθαρισμός της εισαγωγής δεν ολοκληρώθηκε.")
+            } finally {
+                endOperation()
+            }
+        }
     }
 
     suspend fun getDocument(id: String): DocumentEntity? = repository.document(id)
 
-    fun updateDocument(id: String, title: String, category: String, tags: String, provider: String, issuedDate: String?, expiryDate: String?, protocolNumber: String?) = viewModelScope.launch {
-        runCatching { repository.updateDocumentMetadata(id, title, category, tags, provider, issuedDate, expiryDate, protocolNumber) }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αποθήκευση.") }
+    fun updateDocument(id: String, title: String, category: String, tags: String, provider: String, issuedDate: String?, expiryDate: String?, protocolNumber: String?) =
+        launchOperation("Δεν ήταν δυνατή η αποθήκευση.") {
+            repository.updateDocumentMetadata(id, title, category, tags, provider, issuedDate, expiryDate, protocolNumber)
+        }
+
+    fun rerunOcr(id: String) = launchOperation("Δεν ήταν δυνατή η επανάληψη OCR.", "Η επεξεργασία OCR ξεκίνησε ξανά.") {
+        repository.retryOcr(id)
     }
 
-    fun rerunOcr(id: String) = viewModelScope.launch {
-        runCatching { repository.retryOcr(id) }
-            .onSuccess { _message.emit("Η επεξεργασία OCR ξεκίνησε ξανά.") }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η επανάληψη OCR.") }
+    fun deleteDocument(id: String) = launchOperation("Δεν ήταν δυνατή η διαγραφή.", "Το έγγραφο διαγράφηκε.") {
+        repository.deleteDocument(id)
     }
 
-    fun deleteDocument(id: String) = viewModelScope.launch {
-        runCatching { repository.deleteDocument(id) }
-            .onSuccess { _message.emit("Το έγγραφο διαγράφηκε.") }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η διαγραφή.") }
+    fun createCase(title: String, description: String) {
+        if (title.isBlank()) return
+        launchOperation("Δεν ήταν δυνατή η δημιουργία υπόθεσης.") { repository.createCase(title, description) }
     }
 
-    fun createCase(title: String, description: String) = viewModelScope.launch {
-        if (title.isBlank()) return@launch
-        runCatching { repository.createCase(title, description) }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η δημιουργία υπόθεσης.") }
+    fun createCase(title: String, description: String, startDate: String?, deadline: String?, nextStep: String, notes: String) =
+        launchOperation("Δεν ήταν δυνατή η δημιουργία υπόθεσης.") {
+            repository.createCase(title, description, startDate, deadline, nextStep, notes)
+        }
+
+    fun updateCase(id: String, title: String, description: String, status: String, startDate: String?, deadline: String?, nextStep: String, notes: String) =
+        launchOperation("Δεν ήταν δυνατή η αποθήκευση της υπόθεσης.") {
+            repository.updateCase(id, title, description, status, startDate, deadline, nextStep, notes)
+        }
+
+    fun deleteCase(id: String) = launchOperation("Δεν ήταν δυνατή η διαγραφή της υπόθεσης.", "Η υπόθεση διαγράφηκε.") {
+        repository.deleteCase(id)
     }
 
-    fun createCase(title: String, description: String, startDate: String?, deadline: String?, nextStep: String, notes: String) = viewModelScope.launch {
-        runCatching { repository.createCase(title, description, startDate, deadline, nextStep, notes) }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η δημιουργία υπόθεσης.") }
-    }
-
-    fun updateCase(id: String, title: String, description: String, status: String, startDate: String?, deadline: String?, nextStep: String, notes: String) = viewModelScope.launch {
-        runCatching { repository.updateCase(id, title, description, status, startDate, deadline, nextStep, notes) }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αποθήκευση της υπόθεσης.") }
-    }
-
-    fun deleteCase(id: String) = viewModelScope.launch {
-        runCatching { repository.deleteCase(id) }
-            .onSuccess { _message.emit("Η υπόθεση διαγράφηκε.") }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η διαγραφή της υπόθεσης.") }
-    }
-
-    fun updateCaseStatus(id: String, status: String) = viewModelScope.launch {
+    fun updateCaseStatus(id: String, status: String) = launchOperation("Δεν ήταν δυνατή η αλλαγή κατάστασης.") {
         repository.updateCaseStatus(id, status)
     }
 
-    fun addTimelineEvent(caseId: String, title: String, note: String) = viewModelScope.launch {
-        if (title.isNotBlank()) repository.addTimelineEvent(caseId, title, note)
+    fun addTimelineEvent(caseId: String, title: String, note: String) {
+        if (title.isNotBlank()) launchOperation("Δεν ήταν δυνατή η προσθήκη στο χρονολόγιο.") { repository.addTimelineEvent(caseId, title, note) }
     }
 
-    fun addChecklistItem(caseId: String, title: String) = viewModelScope.launch {
-        if (title.isNotBlank()) repository.addChecklistItem(caseId, title)
+    fun addChecklistItem(caseId: String, title: String) {
+        if (title.isNotBlank()) launchOperation("Δεν ήταν δυνατή η προσθήκη.") { repository.addChecklistItem(caseId, title) }
     }
 
-    fun addChecklistItem(caseId: String, title: String, linkedDocumentId: String?) = viewModelScope.launch {
-        if (title.isNotBlank()) runCatching { repository.addChecklistItem(caseId, title, linkedDocumentId) }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η προσθήκη.") }
+    fun addChecklistItem(caseId: String, title: String, linkedDocumentId: String?) {
+        if (title.isNotBlank()) launchOperation("Δεν ήταν δυνατή η προσθήκη.") { repository.addChecklistItem(caseId, title, linkedDocumentId) }
     }
 
-    fun setChecklistComplete(item: ChecklistItemEntity, complete: Boolean) = viewModelScope.launch {
+    fun setChecklistComplete(item: ChecklistItemEntity, complete: Boolean) = launchOperation("Δεν ήταν δυνατή η ενημέρωση της λίστας.") {
         repository.setChecklistComplete(item.id, complete)
     }
 
-    fun linkChecklistDocument(item: ChecklistItemEntity, documentId: String?) = viewModelScope.launch {
-        runCatching { repository.linkChecklistDocument(item.id, documentId) }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η σύνδεση.") }
+    fun linkChecklistDocument(item: ChecklistItemEntity, documentId: String?) = launchOperation("Δεν ήταν δυνατή η σύνδεση.") {
+        repository.linkChecklistDocument(item.id, documentId)
     }
 
-    fun deleteChecklistItem(item: ChecklistItemEntity) = viewModelScope.launch { repository.deleteChecklistItem(item.id) }
+    fun deleteChecklistItem(item: ChecklistItemEntity) = launchOperation("Δεν ήταν δυνατή η διαγραφή.") {
+        repository.deleteChecklistItem(item.id)
+    }
 
     fun timeline(caseId: String) = repository.timeline(caseId)
     fun checklist(caseId: String) = repository.checklist(caseId)
     fun caseDocuments(caseId: String) = repository.caseDocuments(caseId)
 
-    fun attachDocumentToCase(caseId: String, documentId: String) = viewModelScope.launch {
+    fun attachDocumentToCase(caseId: String, documentId: String) = launchOperation("Δεν ήταν δυνατή η σύνδεση.") {
         repository.attachDocumentToCase(caseId, documentId)
     }
 
-    fun detachDocumentFromCase(caseId: String, documentId: String) = viewModelScope.launch {
+    fun detachDocumentFromCase(caseId: String, documentId: String) = launchOperation("Δεν ήταν δυνατή η αποσύνδεση.") {
         repository.detachDocumentFromCase(caseId, documentId)
     }
 
-    fun markReminderDone(id: String) = viewModelScope.launch {
+    fun markReminderDone(id: String) = launchOperation("Δεν ήταν δυνατή η ενημέρωση της υπενθύμισης.") {
         repository.markReminderDone(id)
     }
 
@@ -156,44 +165,39 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
 
     fun clearSearch() { _query.value = "" }
 
-    fun createBackup(destination: Uri, password: String) = viewModelScope.launch {
-        _busy.value = true
-        runCatching { backupService.create(destination, password) }
-            .onSuccess { _message.emit("Το κρυπτογραφημένο αντίγραφο δημιουργήθηκε.") }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η δημιουργία του αντιγράφου.") }
-        _busy.value = false
+    fun createBackup(destination: Uri, password: String) = launchOperation("Δεν ήταν δυνατή η δημιουργία του αντιγράφου.", "Το κρυπτογραφημένο αντίγραφο δημιουργήθηκε.") {
+        backupService.create(destination, password)
     }
 
-    fun restoreBackup(source: Uri, password: String) = viewModelScope.launch {
-        _busy.value = true
-        runCatching { backupService.restore(source, password) }
-            .onSuccess { _message.emit("Η επαναφορά ολοκληρώθηκε.") }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η επαναφορά του αντιγράφου.") }
-        _busy.value = false
+    fun restoreBackup(source: Uri, password: String) = launchOperation("Δεν ήταν δυνατή η επαναφορά του αντιγράφου.", "Η επαναφορά ολοκληρώθηκε.") {
+        backupService.restore(source, password)
     }
 
-    fun exportDocuments(destination: Uri, documentIds: List<String>) = viewModelScope.launch {
-        _busy.value = true
-        runCatching { exportService.exportDocuments(destination, documentIds) }
-            .onSuccess { _message.emit("Η εξαγωγή ZIP ολοκληρώθηκε. Το αρχείο δεν είναι κρυπτογραφημένο.") }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η εξαγωγή.") }
-        _busy.value = false
+    fun exportDocuments(destination: Uri, documentIds: List<String>) = launchOperation("Δεν ήταν δυνατή η εξαγωγή.", "Η εξαγωγή ZIP ολοκληρώθηκε. Το αρχείο δεν είναι κρυπτογραφημένο.") {
+        exportService.exportDocuments(destination, documentIds)
     }
 
-    fun exportPdf(destination: Uri, documentIds: List<String>) = viewModelScope.launch {
-        _busy.value = true
-        runCatching { exportService.exportPdf(destination, documentIds) }
-            .onSuccess { _message.emit("Το ενιαίο PDF δημιουργήθηκε. Το αρχείο δεν είναι κρυπτογραφημένο.") }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η δημιουργία PDF.") }
-        _busy.value = false
+    fun exportPdf(destination: Uri, documentIds: List<String>) = launchOperation("Δεν ήταν δυνατή η δημιουργία PDF.", "Το ενιαίο PDF δημιουργήθηκε. Το αρχείο δεν είναι κρυπτογραφημένο.") {
+        exportService.exportPdf(destination, documentIds)
     }
 
-    companion object {
-        val caseStatuses = listOf(
-            CaseStatus.NEW, CaseStatus.IN_PROGRESS, CaseStatus.WAITING,
-            CaseStatus.ACTION, CaseStatus.COMPLETED, CaseStatus.ARCHIVED
-        )
+    private fun launchOperation(errorMessage: String, successMessage: String? = null, operation: suspend () -> Unit) = viewModelScope.launch {
+        beginOperation()
+        try {
+            operation()
+            successMessage?.let { _message.emit(it) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            _message.emit(error.message ?: errorMessage)
+        } finally {
+            endOperation()
+        }
     }
+
+    private fun beginOperation() { _activeOperations.update { it + 1 } }
+
+    private fun endOperation() { _activeOperations.update { (it - 1).coerceAtLeast(0) } }
 
     private data class DocumentFilters(
         val query: String,

@@ -9,9 +9,6 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface DocumentDao {
-    @Query("SELECT * FROM documents ORDER BY updatedAt DESC")
-    fun observeAll(): Flow<List<DocumentEntity>>
-
     @Query("""
         SELECT d.* FROM documents AS d
         WHERE (:ftsQuery = '' OR d.id IN (
@@ -40,11 +37,14 @@ interface DocumentDao {
     @Query("SELECT * FROM documents WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): DocumentEntity?
 
-    @Query("SELECT * FROM documents WHERE expiryDate IS NOT NULL ORDER BY expiryDate ASC")
-    fun observeExpiring(): Flow<List<DocumentEntity>>
+    @Query("SELECT * FROM documents WHERE processingState = :state")
+    suspend fun getByProcessingState(state: String): List<DocumentEntity>
 
     @Query("SELECT * FROM documents")
     suspend fun getAll(): List<DocumentEntity>
+
+    @Query("SELECT COUNT(*) FROM documents")
+    suspend fun count(): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(document: DocumentEntity)
@@ -85,6 +85,18 @@ interface DocumentDao {
         updatedAt: Long
     )
 
+    @Query("UPDATE documents SET processingState = :state, processingError = :error, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateProcessingState(id: String, state: String, error: String?, updatedAt: Long)
+
+    @Query("UPDATE documents SET processingState = :state, processingError = :error, updatedAt = :updatedAt WHERE id = :id AND processingState = :expectedState")
+    suspend fun updateProcessingStateIfCurrent(
+        id: String,
+        expectedState: String,
+        state: String,
+        error: String?,
+        updatedAt: Long
+    ): Int
+
     @Query("DELETE FROM documents WHERE id = :id")
     suspend fun deleteById(id: String)
 
@@ -99,9 +111,6 @@ interface DocumentPageDao {
 
     @Query("SELECT * FROM document_pages")
     suspend fun getAll(): List<DocumentPageEntity>
-
-    @Query("SELECT * FROM document_pages WHERE documentId = :documentId ORDER BY pageIndex ASC")
-    suspend fun getForDocumentOrdered(documentId: String): List<DocumentPageEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(pages: List<DocumentPageEntity>)

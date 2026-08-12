@@ -13,15 +13,16 @@ import androidx.work.WorkerParameters
 import com.angel.personalfolder.MainActivity
 import com.angel.personalfolder.R
 import com.angel.personalfolder.data.AppDatabase
+import com.angel.personalfolder.data.LibraryOperationCoordinator
 
 class ReminderWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
-    override suspend fun doWork(): Result {
-        val id = inputData.getString(KEY_REMINDER_ID) ?: return Result.failure()
+    override suspend fun doWork(): Result = LibraryOperationCoordinator.withExclusive {
+        val id = inputData.getString(KEY_REMINDER_ID) ?: return@withExclusive Result.failure()
         val reminder = AppDatabase.get(applicationContext).reminderDao().getById(id)
-            ?: return Result.success()
-        if (reminder.isDone) return Result.success()
+            ?: return@withExclusive Result.success()
+        if (reminder.isDone) return@withExclusive Result.success()
         if (ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            return Result.success()
+            return@withExclusive Result.success()
         }
         val pendingIntent = PendingIntent.getActivity(
             applicationContext, id.hashCode(), Intent(applicationContext, MainActivity::class.java),
@@ -38,7 +39,7 @@ class ReminderWorker(appContext: Context, params: WorkerParameters) : CoroutineW
             .setAutoCancel(true)
             .build()
         NotificationManagerCompat.from(applicationContext).notify(id.hashCode(), notification)
-        return Result.success()
+        Result.success()
     }
 
     companion object { const val KEY_REMINDER_ID = "reminder_id" }

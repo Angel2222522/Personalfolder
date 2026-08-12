@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -76,7 +77,7 @@ private fun ScannerThumbnail(uri: Uri) {
     val context = LocalContext.current
     val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, uri) {
         value = withContext(Dispatchers.IO) {
-            runCatching {
+            try {
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
                 val sample = calculateSample(bounds.outWidth, bounds.outHeight)
@@ -86,7 +87,11 @@ private fun ScannerThumbnail(uri: Uri) {
                         inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
                     })?.asImageBitmap()
                 }
-            }.getOrNull()
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Throwable) {
+                null
+            }
         }
     }
     bitmap?.let { Image(it, contentDescription = null, modifier = Modifier.size(72.dp)) }

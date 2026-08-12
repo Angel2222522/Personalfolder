@@ -26,6 +26,7 @@ import com.angel.personalfolder.processing.ScannerImageProcessor
 import com.angel.personalfolder.ui.FolderApp
 import com.angel.personalfolder.ui.FolderViewModel
 import com.angel.personalfolder.ui.PersonalFolderTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -36,7 +37,6 @@ class MainActivity : FragmentActivity() {
     private val viewModel by lazy { androidx.lifecycle.ViewModelProvider(this)[FolderViewModel::class.java] }
     private val settings by lazy { getSharedPreferences("personal_folder_settings", MODE_PRIVATE) }
     private var cameraFile: File? = null
-    private var cameraUri: Uri? = null
     private var sessionUnlocked by mutableStateOf(false)
     private var lockEnabled by mutableStateOf(false)
     private var lockPromptVisible = false
@@ -71,7 +71,6 @@ class MainActivity : FragmentActivity() {
         }
         else file?.delete()
         cameraFile = null
-        cameraUri = null
     }
 
     private val backupCreator = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
@@ -102,7 +101,6 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        lifecycleScope.launch { TempFileCleaner.recover(this@MainActivity) }
         lockEnabled = settings.getBoolean(KEY_LOCK, false)
         if (lockEnabled && !canAuthenticate()) {
             // An already-enabled lock must fail closed. Do not silently weaken the
@@ -180,8 +178,7 @@ class MainActivity : FragmentActivity() {
     private fun launchCamera() {
         val file = File(cacheDir, "camera/${System.currentTimeMillis()}.jpg").apply { parentFile?.mkdirs() }
         cameraFile = file
-        cameraUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-        cameraCapture.launch(cameraUri!!)
+        cameraCapture.launch(FileProvider.getUriForFile(this, "$packageName.fileprovider", file))
     }
 
     private fun handleIncomingIntent(incoming: Intent?) {
@@ -211,48 +208,59 @@ class MainActivity : FragmentActivity() {
         if (queued.isNotEmpty()) viewModel.importUris(queued)
     }
 
-    private fun openDocument(documentId: String) {
-        lifecycleScope.launch {
-            var shareFile: File? = null
-            runCatching {
-                check(!lockEnabled || sessionUnlocked) { "Η συνεδρία κλειδώθηκε. Ταυτοποιήσου ξανά." }
-                val document = viewModel.getDocument(documentId) ?: error("Το έγγραφο δεν βρέθηκε.")
-                val file = exportService.createSharePdf(document.id)
-                shareFile = file
-                check(!lockEnabled || sessionUnlocked) { "Η συνεδρία κλειδώθηκε πριν ολοκληρωθεί το άνοιγμα." }
-                val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", file)
-                val intent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, "application/pdf")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                startActivity(Intent.createChooser(intent, getString(R.string.open_original)))
-                TempFileCleaner.scheduleDeletion(file)
-                shareFile = null
-            }.onFailure { showAuthMessage(it.message ?: "Δεν ήταν δυνατό το άνοιγμα του εγγράφου.") }
-            shareFile?.delete()
+    private fun openDocument(documentId: String) = launchDocumentIntent(
+        documentId = documentId,
+        chooserTitle = getString(R.string.open_original),
+        failureMessage = "Δεν ήταν δυνατό το άνοιγμα του εγγράφου.",
+        sessionExpiredMessage = "Η συνεδρία κλειδώθηκε πριν ολοκληρωθεί το άνοιγμα.",
+        intentFactory = { uri ->
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/pdf")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
         }
-    }
+    )
 
-    private fun shareDocument(documentId: String) {
+    private fun shareDocument(documentId: String) = launchDocumentIntent(
+        documentId = documentId,
+        chooserTitle = getString(R.string.share_document),
+        failureMessage = "Δεν ήταν δυνατή η κοινοποίηση.",
+        sessionExpiredMessage = "Η συνεδρία κλειδώθηκε πριν ολοκληρωθεί η κοινοποίηση.",
+        intentFactory = { uri ->
+            Intent(Intent.ACTION_SEND).apply {
+                type = "application/pdf"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }
+    )
+
+    private fun launchDocumentIntent(
+        documentId: String,
+        chooserTitle: String,
+        failureMessage: String,
+        sessionExpiredMessage: String,
+        intentFactory: (Uri) -> Intent
+    ) {
         lifecycleScope.launch {
             var shareFile: File? = null
-            runCatching {
+            try {
                 check(!lockEnabled || sessionUnlocked) { "Η συνεδρία κλειδώθηκε. Ταυτοποιήσου ξανά." }
                 val document = viewModel.getDocument(documentId) ?: error("Το έγγραφο δεν βρέθηκε.")
                 val file = exportService.createSharePdf(document.id)
                 shareFile = file
-                check(!lockEnabled || sessionUnlocked) { "Η συνεδρία κλειδώθηκε πριν ολοκληρωθεί η κοινοποίηση." }
+                check(!lockEnabled || sessionUnlocked) { sessionExpiredMessage }
                 val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", file)
-                val intent = Intent(Intent.ACTION_SEND).apply {
-                    type = "application/pdf"
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                startActivity(Intent.createChooser(intent, getString(R.string.share_document)))
+                startActivity(Intent.createChooser(intentFactory(uri), chooserTitle))
                 TempFileCleaner.scheduleDeletion(file)
                 shareFile = null
-            }.onFailure { showAuthMessage(it.message ?: "Δεν ήταν δυνατή η κοινοποίηση.") }
-            shareFile?.delete()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                showAuthMessage(error.message ?: failureMessage)
+            } finally {
+                shareFile?.delete()
+            }
         }
     }
 
@@ -327,6 +335,8 @@ class MainActivity : FragmentActivity() {
                         scannerFiles = emptyList()
                     }
                 }
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
                 rawFiles.forEach(File::delete)
                 processed.forEach(File::delete)

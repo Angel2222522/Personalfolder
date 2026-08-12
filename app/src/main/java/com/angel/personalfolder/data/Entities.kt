@@ -201,4 +201,6 @@ object CaseStatus {
     const val ACTION = "Χρειάζεται ενέργεια"
     const val COMPLETED = "Ολοκληρώθηκε"
     const val ARCHIVED = "Αρχειοθετήθηκε"
+
+    val all = listOf(NEW, IN_PROGRESS, WAITING, ACTION, COMPLETED, ARCHIVED)
 }

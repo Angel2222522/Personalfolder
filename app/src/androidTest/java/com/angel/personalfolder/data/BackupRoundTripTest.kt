@@ -6,6 +6,7 @@ import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.angel.personalfolder.security.BackupCrypto
+import com.angel.personalfolder.security.DocumentStorage
 import com.angel.personalfolder.security.FileCrypto
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -33,7 +34,7 @@ class BackupRoundTripTest {
     fun setUp() = runBlocking {
         database = AppDatabase.get(context)
         documentId = "backup-test-${UUID.randomUUID()}"
-        documentRoot = context.filesDir.resolve("documents/$documentId").apply { mkdirs() }
+        documentRoot = DocumentStorage.documentDirectory(context, documentId).apply { mkdirs() }
         val encrypted = documentRoot.resolve("page_0.pf")
         FileCrypto.encrypt(ByteArrayInputStream("sensitive page".toByteArray(StandardCharsets.UTF_8)), encrypted)
         val now = System.currentTimeMillis()
@@ -103,6 +104,7 @@ class BackupRoundTripTest {
         FileCrypto.decryptToTemp(File(restored!!.encryptedPath), plain)
         assertEquals("sensitive page", plain.readText())
         plain.delete()
+        Unit
     }
 
     @Test
