@@ -25,83 +25,107 @@ class ExportService(private val context: Context) {
 
     suspend fun exportDocuments(destination: Uri, documentIds: List<String>) = withContext(Dispatchers.IO) {
         DataOperationCoordinator.withExclusive {
-        val documents = selectedDocuments(documentIds)
-        val selectedIds = documents.map(DocumentEntity::id).toSet()
-        val pages = database.documentPageDao().getAll()
-            .filter { it.documentId in selectedIds }
-        require(pages.isNotEmpty()) { "Δεν βρέθηκαν σελίδες για εξαγωγή." }
-        val temporary = context.cacheDir.resolve("export/export_${UUID.randomUUID()}.zip").apply { parentFile?.mkdirs() }
-        try {
-            ZipOutputStream(temporary.outputStream()).use { output ->
-                val manifest = JSONObject().apply {
-                    put("formatVersion", 2)
-                    put("documents", JSONArray().apply {
-                        documents.forEach { document ->
-                            put(JSONObject().apply {
-                                put("id", document.id)
-                                put("title", document.title)
-                                put("originalFileName", document.originalFileName)
-                                put("mimeType", document.mimeType)
-                                put("pageCount", document.pageCount)
-                            })
-                        }
-                    })
-                }
-                output.putNextEntry(ZipEntry("manifest.json"))
-                output.write(manifest.toString().toByteArray(Charsets.UTF_8))
-                output.closeEntry()
-                documents.forEach { document ->
-                    val documentPages = pages.filter { it.documentId == document.id }.sortedBy { it.pageIndex }
-                    require(documentPages.isNotEmpty()) { "Λείπει σελίδα από το έγγραφο «${document.title}»." }
-                    documentPages.forEach { page ->
-                        val source = File(page.encryptedPath)
-                        require(FileCrypto.isPrivateDocumentFile(context, source)) { "Η σελίδα βρίσκεται εκτός του ιδιωτικού χώρου." }
-                        require(source.isFile) { "Λείπει σελίδα από το έγγραφο «${document.title}»." }
-                        val plain = context.cacheDir.resolve("export/plain_${UUID.randomUUID()}.tmp").apply { parentFile?.mkdirs() }
-                        try {
-                            FileCrypto.decryptToTemp(source, plain)
-                            val extension = extensionOf(page.sourceFileName.ifBlank { document.originalFileName })
-                            output.putNextEntry(ZipEntry("documents/${document.id}/page_${page.pageIndex + 1}.$extension"))
-                            FileInputStream(plain).use { it.copyTo(output) }
-                            output.closeEntry()
-                        } finally {
-                            plain.delete()
+            val documents = selectedDocuments(documentIds)
+            val selectedIds = documents.map(DocumentEntity::id).toSet()
+            val pages = database.documentPageDao().getAll()
+                .filter { it.documentId in selectedIds }
+            require(pages.isNotEmpty()) { "Δεν βρέθηκαν σελίδες για εξαγωγή." }
+            val temporary = context.cacheDir.resolve("export/export_${UUID.randomUUID()}.zip").apply { parentFile?.mkdirs() }
+            try {
+                ZipOutputStream(temporary.outputStream()).use { output ->
+                    val manifest = JSONObject().apply {
+                        put("formatVersion", 2)
+                        put("documents", JSONArray().apply {
+                            documents.forEach { document ->
+                                put(JSONObject().apply {
+                                    put("id", document.id)
+                                    put("title", document.title)
+                                    put("originalFileName", document.originalFileName)
+                                    put("mimeType", document.mimeType)
+                                    put("pageCount", document.pageCount)
+                                })
+                            }
+                        })
+                    }
+                    output.putNextEntry(ZipEntry("manifest.json"))
+                    output.write(manifest.toString().toByteArray(Charsets.UTF_8))
+                    output.closeEntry()
+                    documents.forEach { document ->
+                        val documentPages = pages.filter { it.documentId == document.id }.sortedBy { it.pageIndex }
+                        require(documentPages.isNotEmpty()) { "Λείπει σελίδα από το έγγραφο «${document.title}»." }
+                        documentPages.forEach { page ->
+                            val source = File(page.encryptedPath)
+                            require(FileCrypto.isPrivateDocumentFile(context, source)) { "Η σελίδα βρίσκεται εκτός του ιδιωτικού χώρου." }
+                            require(source.isFile) { "Λείπει σελίδα από το έγγραφο «${document.title}»." }
+                            val plain = context.cacheDir.resolve("export/plain_${UUID.randomUUID()}.tmp").apply { parentFile?.mkdirs() }
+                            try {
+                                FileCrypto.decryptToTemp(source, plain)
+                                val extension = extensionOf(page.sourceFileName.ifBlank { document.originalFileName })
+                                output.putNextEntry(ZipEntry("documents/${document.id}/page_${page.pageIndex + 1}.$extension"))
+                                FileInputStream(plain).use { it.copyTo(output) }
+                                output.closeEntry()
+                            } finally {
+                                plain.delete()
+                            }
                         }
                     }
                 }
+                require(temporary.length() in 1..MAX_EXPORT_BYTES) { "Το αρχείο εξαγωγής είναι υπερβολικά μεγάλο." }
+                copyToDestination(temporary, destination, "Δεν ήταν δυνατή η δημιουργία του αρχείου εξαγωγής.")
+            } finally {
+                temporary.delete()
             }
-            require(temporary.length() in 1..MAX_EXPORT_BYTES) { "Το αρχείο εξαγωγής είναι υπερβολικά μεγάλο." }
-            copyToDestination(temporary, destination, "Δεν ήταν δυνατή η δημιουργία του αρχείου εξαγωγής.")
-        } finally {
-            temporary.delete()
-        }
         }
     }
 
     suspend fun exportPdf(destination: Uri, documentIds: List<String>) = withContext(Dispatchers.IO) {
         DataOperationCoordinator.withExclusive {
-        val documents = selectedDocuments(documentIds)
-        val pdf = context.cacheDir.resolve("export/export_${UUID.randomUUID()}.pdf").apply { parentFile?.mkdirs() }
-        try {
-            buildPdfFile(documents, pdf)
-            copyToDestination(pdf, destination, "Δεν ήταν δυνατή η δημιουργία του PDF.")
-        } finally {
-            pdf.delete()
-        }
+            val documents = selectedDocuments(documentIds)
+            val pdf = context.cacheDir.resolve("export/export_${UUID.randomUUID()}.pdf").apply { parentFile?.mkdirs() }
+            try {
+                buildPdfFile(documents, pdf)
+                copyToDestination(pdf, destination, "Δεν ήταν δυνατή η δημιουργία του PDF.")
+            } finally {
+                pdf.delete()
+            }
         }
     }
 
     suspend fun createSharePdf(documentId: String): File = withContext(Dispatchers.IO) {
         DataOperationCoordinator.withExclusive {
-        val document = database.documentDao().getById(documentId) ?: error("Το έγγραφο δεν βρέθηκε.")
-        val output = context.cacheDir.resolve("share/${document.id}_${UUID.randomUUID()}.pdf").apply { parentFile?.mkdirs() }
-        try {
-            buildPdfFile(listOf(document), output)
-            output
-        } catch (error: Throwable) {
-            output.delete()
-            throw error
-        }
+            val document = database.documentDao().getById(documentId) ?: error("Το έγγραφο δεν βρέθηκε.")
+            val output = context.cacheDir.resolve("share/${document.id}_${UUID.randomUUID()}.pdf").apply { parentFile?.mkdirs() }
+            try {
+                val source = database.documentPageDao().getForDocument(document.id)
+                    .sortedBy { it.pageIndex }
+                    .singleOrNull()
+                    ?: DocumentPageEntity(
+                        documentId = document.id,
+                        pageIndex = 0,
+                        encryptedPath = document.encryptedPath,
+                        sourceFileName = document.originalFileName,
+                        mimeType = document.mimeType
+                    )
+                val originalPdf = source.takeIf { isPdf(it.mimeType, it.sourceFileName, document) }
+                if (originalPdf != null) {
+                    // Opening/sharing an imported single-source PDF should
+                    // expose the original PDF bytes. The decrypted copy is
+                    // temporary and the encrypted source remains untouched.
+                    val encrypted = File(originalPdf.encryptedPath)
+                    require(FileCrypto.isPrivateDocumentFile(context, encrypted) && encrypted.isFile) {
+                        "Το αρχείο του εγγράφου δεν βρίσκεται στον ιδιωτικό χώρο."
+                    }
+                    FileCrypto.decryptToTemp(encrypted, output)
+                } else {
+                    // Images, mixed sources and multi-source documents need a
+                    // derived PDF assembled from their faithful page renders.
+                    buildPdfFile(listOf(document), output)
+                }
+                output
+            } catch (error: Throwable) {
+                output.delete()
+                throw error
+            }
         }
     }
 
@@ -146,6 +170,11 @@ class ExportService(private val context: Context) {
         .lowercase()
         .replace(Regex("[^a-z0-9]"), "")
         .ifBlank { "bin" }
+
+    private fun isPdf(mimeType: String, sourceName: String, document: DocumentEntity): Boolean =
+        mimeType.equals("application/pdf", ignoreCase = true) ||
+            sourceName.substringAfterLast('.', "").equals("pdf", ignoreCase = true) ||
+            (sourceName.isBlank() && document.mimeType.equals("application/pdf", ignoreCase = true))
 
     private class StreamingPdfWriter(output: OutputStream, pageCount: Int) : AutoCloseable {
         private val out = CountingOutputStream(output, MAX_EXPORT_BYTES)

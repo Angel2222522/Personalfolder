@@ -26,6 +26,7 @@ Offline-first Android εφαρμογή για ιδιωτική οργάνωση 
 - Υποθέσεις με πλήρη πεδία, edit/delete, συνδεδεμένα documents, checklist με προαιρετικό document link, timeline και reminders deadline.
 - Room FTS αναζήτηση σε τίτλο, filename, OCR, φορέα, κατηγορία, tags και protocol number, με φίλτρα κατηγορίας, υπόθεσης, processing state και σύντομης λήξης.
 - Εξαγωγή ZIP με όλες τις σελίδες και streaming unified PDF χωρίς εξάρτηση από εξωτερικό viewer. Οι ordinary exports είναι μη κρυπτογραφημένοι.
+- Για ένα εισαγόμενο PDF, ο εσωτερικός viewer και το εξωτερικό άνοιγμα χρησιμοποιούν τα αυθεντικά PDF bytes μέσω προσωρινής αποκρυπτογράφησης· μόνο το bitmap rendering/OCR γίνεται προσωρινά. Εικόνες, mixed documents και ενιαίο export PDF δημιουργούν παράγωγο PDF.
 - Password-protected portable backup με bounded/validated ZIP restore, interrupted-restore journal recovery, wrong-password/corruption handling, relations και reminder rescheduling.
 - Biometric/device-credential lock με fail-closed policy, `FLAG_SECURE`, masked password fields και generic notifications χωρίς τίτλους εγγράφων.
 

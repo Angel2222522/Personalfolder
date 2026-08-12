@@ -277,22 +277,41 @@ class BackupService(private val context: Context) {
             clearRestoreJournal()
         } catch (error: Throwable) {
             if (!databaseCommitted && filesInstalled) {
-                val rollbackSucceeded = runCatching {
-                    FileCrypto.deleteRecursivelyStrict(root)
-                    if (previousMoved) {
+                if (previousMoved) {
+                    val rollbackSucceeded = runCatching {
+                        FileCrypto.deleteRecursivelyStrict(root)
                         require(previousRoot.renameTo(root)) { "Δεν ήταν δυνατή η επαναφορά της προηγούμενης γενιάς." }
+                        clearRestoreJournal()
+                    }.isSuccess
+                    if (!rollbackSucceeded) {
+                        // Keep the journal: deleting it here would make the
+                        // only remaining recovery evidence disappear after a
+                        // process death.
                     }
-                    clearRestoreJournal()
-                }.isSuccess
-                if (!rollbackSucceeded) {
-                    // Keep the journal: deleting it here would make the only
-                    // remaining recovery evidence disappear after a process death.
+                } else {
+                    // There was no proven previous filesystem generation.
+                    // Preserve the installed replacement and its journal
+                    // instead of deleting the only available copy.
                 }
             } else if (!databaseCommitted && !filesInstalled) {
-                // The live root was never moved or replaced, so clearing the
-                // prepared journal is safe and avoids pinning a disposable
-                // staging tree after a validation/install failure.
-                clearRestoreJournal()
+                if (previousMoved) {
+                    // The process may fail after moving the old root but
+                    // before installing the staged root. Restore that old
+                    // generation before removing the prepared journal.
+                    val restored = runCatching {
+                        require(!root.exists()) { "Το παλιό αρχείο επαναφοράς δεν βρίσκεται στη σωστή θέση." }
+                        require(previousRoot.renameTo(root)) { "Δεν ήταν δυνατή η επαναφορά της προηγούμενης γενιάς." }
+                        clearRestoreJournal()
+                    }.isSuccess
+                    if (!restored) {
+                        // Keep the journal so startup recovery can retry.
+                    }
+                } else {
+                    // The live root was never moved or replaced, so clearing
+                    // the prepared journal is safe and avoids pinning a
+                    // disposable staging tree after a validation failure.
+                    clearRestoreJournal()
+                }
             }
             throw error
         } finally {
@@ -469,13 +488,16 @@ class BackupService(private val context: Context) {
         for (i in 0 until checkedLength(array)) {
             val x = array!!.getJSONObject(i); val documentId = x.optNullableString("documentId")?.let(::requireSafeId); val caseId = x.optNullableString("caseId")?.let(::requireSafeId)
             require((documentId == null || documentId in documents) && (caseId == null || caseId in cases)) { "Το αντίγραφο περιέχει άκυρη υπενθύμιση." }
-            if (documentId != null && documentId !in confirmedExpiryDocuments) continue
             val id = requireSafeId(x.getString("id")); require(seen.add(id)) { "Το αντίγραφο περιέχει διπλή υπενθύμιση." }
             val dueAt = x.getLong("dueAt")
             require(dueAt in 0L..MAX_DUE_AT) { "Η υπενθύμιση έχει μη έγκυρη ημερομηνία." }
             val leadDays = x.optInt("leadDays").coerceIn(0, 3650)
             val deadlineAt = x.optLong("deadlineAt", dueAt + leadDays * 86_400_000L)
                 .coerceIn(0L, MAX_DUE_AT)
+            // Validate the complete legacy/current row first. Only then
+            // discard a document reminder whose expiry is still a suggestion;
+            // malformed backup data must never be hidden by that policy.
+            if (documentId != null && documentId !in confirmedExpiryDocuments) continue
             add(ReminderEntity(id, x.getString("title").take(500), dueAt, documentId, caseId, leadDays, x.optBoolean("isDone"), deadlineAt))
         }
     }

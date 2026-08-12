@@ -64,7 +64,14 @@ class FolderRepository(private val context: Context) {
         return@withContext try {
             distinctUris.forEachIndexed { index, uri ->
                 val name = safeDisplayName(uri) ?: "σελίδα_${index + 1}"
-                val mime = context.contentResolver.getType(uri).orEmpty().ifBlank { guessMime(name) }
+                val reportedMime = context.contentResolver.getType(uri).orEmpty()
+                // Some document providers report every picked file as
+                // application/octet-stream. Use the extension only as a
+                // decoding hint; the PDF renderer/bitmap decoder below still
+                // validates the actual bytes before the Room commit.
+                val mime = reportedMime.takeUnless {
+                    it.isBlank() || it.equals("application/octet-stream", ignoreCase = true)
+                } ?: guessMime(name)
                 require(mime == "application/pdf" || mime.startsWith("image/")) {
                     "Ο τύπος αρχείου «$name» δεν υποστηρίζεται."
                 }

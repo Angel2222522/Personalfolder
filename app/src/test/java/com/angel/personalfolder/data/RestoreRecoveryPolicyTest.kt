@@ -37,4 +37,20 @@ class RestoreRecoveryPolicyTest {
         )
         assertEquals(RestoreRecoveryAction.ROLLBACK_TO_PREVIOUS_GENERATION, action)
     }
+
+    @Test
+    fun filesInstalledWithoutPreviousGenerationPreservesReplacement() {
+        val action = RestoreRecoveryPolicy.decide(
+            RestoreRecoveryState("files_installed", setOf("old"), ids, true, false, false, true)
+        )
+        assertEquals(RestoreRecoveryAction.PRESERVE_AND_RETRY, action)
+    }
+
+    @Test
+    fun preparedJournalAfterFilesystemSwapCanFinalize() {
+        val action = RestoreRecoveryPolicy.decide(
+            RestoreRecoveryState("prepared", ids, ids, true, true, false, true)
+        )
+        assertEquals(RestoreRecoveryAction.FINALIZE_NEW_GENERATION, action)
+    }
 }

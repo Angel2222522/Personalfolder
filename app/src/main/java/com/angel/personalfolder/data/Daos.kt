@@ -56,39 +56,6 @@ interface DocumentDao {
     @Update
     suspend fun update(document: DocumentEntity)
 
-    @Query("""
-        UPDATE documents SET title = :title, category = :category, tags = :tags,
-        provider = :provider, issuedDate = :issuedDate, expiryDate = :expiryDate,
-        protocolNumber = :protocolNumber, metadataManuallyEdited = 1, updatedAt = :updatedAt
-        WHERE id = :id
-    """)
-    suspend fun updateMetadata(
-        id: String,
-        title: String,
-        category: String,
-        tags: String,
-        provider: String,
-        issuedDate: String?,
-        expiryDate: String?,
-        protocolNumber: String?,
-        updatedAt: Long
-    )
-
-    @Query("UPDATE documents SET category = :category, ocrText = :ocrText, provider = :provider, issuedDate = :issuedDate, expiryDate = :expiryDate, protocolNumber = :protocolNumber, extractedMetadataJson = :metadataJson, processingState = :state, processingError = :error, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun updateProcessing(
-        id: String,
-        category: String,
-        ocrText: String,
-        provider: String,
-        issuedDate: String?,
-        expiryDate: String?,
-        protocolNumber: String?,
-        metadataJson: String,
-        state: String,
-        error: String?,
-        updatedAt: Long
-    )
-
     @Query("DELETE FROM documents WHERE id = :id")
     suspend fun deleteById(id: String)
 

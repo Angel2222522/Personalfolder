@@ -30,6 +30,8 @@ Document bytes remain under `filesDir/documents/<documentId>/` and database path
 
 PDF viewer and OCR render through separate bitmap instances. `PdfBitmapRenderer` creates an ARGB buffer, renders with `PdfRenderer`, and composites onto an opaque white surface so transparent PDF pixels cannot become a black page. OCR preprocessing never mutates the viewer bitmap or encrypted source.
 
+An imported single-source PDF remains the original PDF bytes under encryption. The internal viewer decrypts only a temporary copy and renders the requested page to a bitmap; OCR renders a separate bitmap for its own input. The external “open/share” path decrypts the original PDF directly for a single-source PDF, while images, mixed documents and explicit unified-PDF export necessarily create a derived PDF from faithful page renders.
+
 All database/filesystem mutations, plus backup snapshots and OCR persistence, pass through `DataOperationCoordinator`. This provides one process-wide generation boundary around Room and the encrypted document tree.
 
 ## Persistence and migrations
