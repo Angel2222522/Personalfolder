@@ -273,8 +273,12 @@ class BackupService(private val context: Context) {
             val documentPages = pages.filter { it.documentId == id }
             require(documentPages.isNotEmpty()) { "Το έγγραφο δεν έχει σελίδες." }
             require(documentPages.all { it.entryName in stagedFiles }) { "Λείπει αρχείο από το έγγραφο." }
-            val pageCount = item.optInt("pageCount", documentPages.size)
-            require(pageCount in documentPages.size..MAX_RESTORED_PAGES) {
+            // Keep the previous restore behavior for legacy backups: an
+            // under-reported count was normalized to the actual page count.
+            // Only reject an excessive count, which cannot be represented
+            // safely by the current document limits.
+            val pageCount = item.optInt("pageCount", documentPages.size).coerceAtLeast(documentPages.size)
+            require(pageCount <= MAX_RESTORED_PAGES) {
                 "Το αντίγραφο περιέχει μη έγκυρο αριθμό σελίδων."
             }
             result += DocumentEntity(

@@ -40,7 +40,7 @@ The current Room version is 4:
 - `2→3`: adds manual metadata state, page source metadata, foreign keys, cascades, indexes and the FTS search table/triggers.
 - `3→4`: adds the declared `checklist_items.linkedDocumentId` index that was missing from the earlier migration. It is a non-destructive index-only migration.
 
-Restore parses and validates all parent/child IDs before a transaction. Files are staged first; a durable restore journal supports startup recovery if the filesystem swap and Room transaction are interrupted.
+Restore parses and validates all parent/child IDs before a transaction, preserves the legacy page-count normalization, and rejects only values above the current page limit. Files are staged first; a durable restore journal supports startup recovery if the filesystem swap and Room transaction are interrupted.
 
 ## Background work
 
