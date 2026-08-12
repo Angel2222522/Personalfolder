@@ -11,12 +11,14 @@ This fingerprint is public and is intentionally committed to the repository. The
 
 ## Required GitHub Actions secrets
 
-The repository workflow expects all four secrets below for every normal release from `main`:
+The repository workflow continues to use the existing four secrets for every normal release from `main`:
 
 - `PERSONAL_FOLDER_KEYSTORE_BASE64`
 - `PERSONAL_FOLDER_KEYSTORE_PASSWORD`
 - `PERSONAL_FOLDER_KEY_ALIAS`
 - `PERSONAL_FOLDER_KEY_PASSWORD`
+
+The keystore is expanded only inside the ephemeral runner and the certificate fingerprint is verified before building/uploading.
 
 If any secret is missing, or if the supplied keystore certificate does not match the permanent SHA-256 fingerprint, the workflow must refuse to create/upload a normal release APK.
 

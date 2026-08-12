@@ -1,6 +1,7 @@
 package com.angel.personalfolder.data
 
 import android.graphics.Color
+import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
@@ -40,6 +41,38 @@ class PdfBitmapRendererTest {
                             assertTrue("Rendered bitmap must be opaque", Color.alpha(background) == 255)
                         } finally {
                             bitmap.recycle()
+                        }
+                    }
+                }
+            }
+        } finally {
+            document.close()
+            pdf.delete()
+        }
+    }
+
+    @Test
+    fun separateRendersKeepViewerBitmapIndependentFromOcrCopy() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val pdf = File(context.cacheDir, "pdf-copy-test-${System.nanoTime()}.pdf")
+        val document = android.graphics.pdf.PdfDocument()
+        try {
+            val page = document.startPage(android.graphics.pdf.PdfDocument.PageInfo.Builder(300, 300, 1).create())
+            page.canvas.drawColor(Color.WHITE)
+            document.finishPage(page)
+            FileOutputStream(pdf).use(document::writeTo)
+            ParcelFileDescriptor.open(pdf, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
+                PdfRenderer(descriptor).use { renderer ->
+                    renderer.openPage(0).use { sourcePage ->
+                        val viewerBitmap = PdfBitmapRenderer.render(sourcePage, 600)
+                        val ocrBitmap = PdfBitmapRenderer.render(sourcePage, 600)
+                        try {
+                            Canvas(ocrBitmap).drawColor(Color.BLACK)
+                            assertTrue(Color.luminance(viewerBitmap.getPixel(10, 10)) > 0.85f)
+                            assertTrue(Color.luminance(ocrBitmap.getPixel(10, 10)) < 0.1f)
+                        } finally {
+                            viewerBitmap.recycle()
+                            ocrBitmap.recycle()
                         }
                     }
                 }

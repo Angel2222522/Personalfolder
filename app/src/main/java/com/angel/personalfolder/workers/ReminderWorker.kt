@@ -13,6 +13,7 @@ import androidx.work.WorkerParameters
 import com.angel.personalfolder.MainActivity
 import com.angel.personalfolder.R
 import com.angel.personalfolder.data.AppDatabase
+import com.angel.personalfolder.data.ReminderDeliveryPolicy
 
 class ReminderWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
@@ -20,7 +21,8 @@ class ReminderWorker(appContext: Context, params: WorkerParameters) : CoroutineW
         val reminder = AppDatabase.get(applicationContext).reminderDao().getById(id)
             ?: return Result.success()
         if (reminder.isDone) return Result.success()
-        if (ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        val notificationPermissionGranted = ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (ReminderDeliveryPolicy.shouldKeepPending(notificationPermissionGranted)) {
             // Keep the row pending. WorkManager will retry with backoff and
             // the app also reschedules all pending rows when permission is
             // granted or the activity resumes.

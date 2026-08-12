@@ -142,7 +142,10 @@ class FolderRepository(private val context: Context) {
             val issuedChanged = current.issuedDate != cleanIssued
             val expiryChanged = current.expiryDate != cleanExpiry
             val protocolChanged = current.protocolNumber != cleanProtocol
-            val anyMetadataChanged = titleChanged || categoryChanged || providerChanged || issuedChanged || expiryChanged || protocolChanged
+            val ownership = MetadataOwnershipPolicy.merge(
+                current,
+                MetadataFieldChanges(titleChanged, categoryChanged, providerChanged, issuedChanged, expiryChanged, protocolChanged)
+            )
             database.documentDao().update(
                 current.copy(
                     title = cleanTitle,
@@ -152,7 +155,7 @@ class FolderRepository(private val context: Context) {
                     issuedDate = cleanIssued,
                     expiryDate = cleanExpiry,
                     protocolNumber = cleanProtocol,
-                    metadataManuallyEdited = current.metadataManuallyEdited || anyMetadataChanged,
+                    metadataManuallyEdited = current.metadataManuallyEdited || ownership.any,
                     expiryDateSuggestion = if (expiryChanged) null else current.expiryDateSuggestion,
                     expiryDateSuggestionConfidence = if (expiryChanged) MetadataConfidence.NONE else current.expiryDateSuggestionConfidence,
                     titleConfidence = if (titleChanged) MetadataConfidence.MANUAL else current.titleConfidence,
@@ -161,12 +164,12 @@ class FolderRepository(private val context: Context) {
                     issuedDateConfidence = if (issuedChanged) MetadataConfidence.MANUAL else current.issuedDateConfidence,
                     expiryDateConfidence = if (expiryChanged) MetadataConfidence.MANUAL else current.expiryDateConfidence,
                     protocolNumberConfidence = if (protocolChanged) MetadataConfidence.MANUAL else current.protocolNumberConfidence,
-                    titleManuallyEdited = current.titleManuallyEdited || titleChanged,
-                    categoryManuallyEdited = current.categoryManuallyEdited || categoryChanged,
-                    providerManuallyEdited = current.providerManuallyEdited || providerChanged,
-                    issuedDateManuallyEdited = current.issuedDateManuallyEdited || issuedChanged,
-                    expiryDateManuallyEdited = current.expiryDateManuallyEdited || expiryChanged,
-                    protocolNumberManuallyEdited = current.protocolNumberManuallyEdited || protocolChanged,
+                    titleManuallyEdited = ownership.title,
+                    categoryManuallyEdited = ownership.category,
+                    providerManuallyEdited = ownership.provider,
+                    issuedDateManuallyEdited = ownership.issuedDate,
+                    expiryDateManuallyEdited = ownership.expiryDate,
+                    protocolNumberManuallyEdited = ownership.protocolNumber,
                     updatedAt = System.currentTimeMillis()
                 )
             )

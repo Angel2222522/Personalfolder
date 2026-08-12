@@ -41,9 +41,11 @@ class AppDatabaseMigrationTest {
             assertEquals(1, database.caseDocumentDao().getAll().size)
             assertEquals(1, database.timelineDao().getAll().size)
             assertEquals(1, database.checklistDao().getAll().size)
+            assertEquals("2026-12-31", database.documentDao().getById("doc-1")?.expiryDateSuggestion)
+            assertEquals(null, database.documentDao().getById("doc-1")?.expiryDate)
+            assertEquals("low", database.documentDao().getById("doc-1")?.expiryDateSuggestionConfidence)
             assertEquals(1, database.reminderDao().getAll().size)
             assertEquals(4102444800000L, database.reminderDao().getAll().single().deadlineAt)
-            assertEquals("unknown", database.documentDao().getById("doc-1")?.expiryDateConfidence)
             database.openHelper.readableDatabase.query("PRAGMA index_list(checklist_items)").use { cursor ->
                 var found = false
                 while (cursor.moveToNext()) if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == "index_checklist_items_linkedDocumentId") found = true
@@ -53,7 +55,7 @@ class AppDatabaseMigrationTest {
             database.documentDao().deleteById("doc-1")
             assertEquals(0, database.documentPageDao().getForDocument("doc-1").size)
             assertEquals(0, database.caseDocumentDao().getAll().size)
-            assertEquals(0, database.reminderDao().getAll().size)
+            assertEquals(1, database.reminderDao().getAll().size)
             assertNull(database.checklistDao().getAll().single().linkedDocumentId)
         } finally {
             database.close()
@@ -85,13 +87,14 @@ class AppDatabaseMigrationTest {
             database.execSQL("CREATE INDEX index_reminders_dueAt ON reminders(dueAt)")
             database.execSQL("CREATE INDEX index_reminders_documentId ON reminders(documentId)")
             database.execSQL("CREATE INDEX index_reminders_caseId ON reminders(caseId)")
-            database.execSQL("INSERT INTO documents (id,title,originalFileName,mimeType,encryptedPath,pageCount,category,tags,provider,issuedDate,expiryDate,protocolNumber,ocrText,extractedMetadataJson,processingState,processingError,createdAt,updatedAt) VALUES ('doc-1','Έγγραφο','doc.pdf','application/pdf','/data/data/app/files/documents/doc-1/page_0.pf',1,'Άλλα','','',NULL,NULL,NULL,'κείμενο','{}','processed',NULL,1,2)")
+            database.execSQL("INSERT INTO documents (id,title,originalFileName,mimeType,encryptedPath,pageCount,category,tags,provider,issuedDate,expiryDate,protocolNumber,ocrText,extractedMetadataJson,processingState,processingError,createdAt,updatedAt) VALUES ('doc-1','Έγγραφο','doc.pdf','application/pdf','/data/data/app/files/documents/doc-1/page_0.pf',1,'Άλλα','','',NULL,'2026-12-31',NULL,'κείμενο','{}','processed',NULL,1,2)")
             database.execSQL("INSERT INTO document_pages VALUES ('doc-1',0,'/data/data/app/files/documents/doc-1/page_0.pf','κείμενο')")
             database.execSQL("INSERT INTO cases VALUES ('case-1','Υπόθεση','περιγραφή','Νέα','2026-01-01','2026-12-31','Επόμενο','σημείωση',1,2)")
             database.execSQL("INSERT INTO case_documents VALUES ('case-1','doc-1')")
             database.execSQL("INSERT INTO timeline_events VALUES ('event-1','case-1','Γεγονός','','manual','2026-01-02',2)")
             database.execSQL("INSERT INTO checklist_items VALUES ('check-1','case-1','Δικαιολογητικό',0,'doc-1',2)")
-            database.execSQL("INSERT INTO reminders VALUES ('rem-1','Υπενθύμιση',4102444800000,'doc-1','case-1',0,0)")
+            database.execSQL("INSERT INTO reminders VALUES ('rem-doc','Υπενθύμιση εγγράφου',4102444800000,'doc-1',NULL,0,0)")
+            database.execSQL("INSERT INTO reminders VALUES ('rem-case','Υπενθύμιση υπόθεσης',4102444800000,NULL,'case-1',0,0)")
             database.execSQL("PRAGMA user_version = $version")
         }
     }

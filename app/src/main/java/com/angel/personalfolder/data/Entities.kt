@@ -212,6 +212,9 @@ object MetadataConfidence {
     const val UNKNOWN = "unknown"
 
     fun isAuthoritative(value: String): Boolean = value == HIGH || value == MEDIUM || value == MANUAL
+
+    fun isConfirmed(value: String?, confidence: String, manuallyEdited: Boolean): Boolean =
+        value != null && (manuallyEdited || isAuthoritative(confidence))
 }
 
 object ProcessingState {

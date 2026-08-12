@@ -31,7 +31,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
-        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "platforms;android-35" "system-images;android-35;google_apis;x86_64"
 
       - name: Run unit tests
         run: gradle testDebugUnitTest
@@ -44,6 +44,21 @@ jobs:
 
       - name: Build debug APK
         run: gradle assembleDebug
+
+      - name: Run instrumentation tests on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: Pixel_2
+          script: gradle connectedDebugAndroidTest
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-folder-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
 
       - name: Verify unsigned release compilation on pull requests
         if: github.event_name == 'pull_request'
@@ -118,12 +133,6 @@ jobs:
             echo "Built APK is not signed with the permanent Personal Folder certificate."
             exit 1
           fi
-
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: personal-folder-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
 
       - name: Upload permanently signed release APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

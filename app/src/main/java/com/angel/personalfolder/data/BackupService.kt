@@ -72,6 +72,12 @@ class BackupService(private val context: Context) {
                     // Never delete the current root when there is no proven
                     // replacement or previous generation. The journal remains
                     // so the next startup can make the same evidence-based decision.
+                    // A prepared journal with the old root still live has not
+                    // crossed the swap boundary; its staging tree is disposable.
+                    if (journal.optString("phase") == "prepared" && root.isDirectory && !previous.isDirectory && staging.exists()) {
+                        FileCrypto.deleteRecursivelyStrict(staging)
+                        journalFile.delete()
+                    }
                 }
             }
         }
@@ -210,7 +216,11 @@ class BackupService(private val context: Context) {
             val relations = parseRelations(manifest.optJSONArray("relations"), caseIds, documentIds)
             val events = parseEvents(manifest.optJSONArray("events"), caseIds)
             val checklist = parseChecklist(manifest.optJSONArray("checklist"), caseIds, documentIds)
-            val reminders = parseReminders(manifest.optJSONArray("reminders"), caseIds, documentIds)
+            val confirmedExpiryDocumentIds = documents.asSequence()
+                .filter { MetadataConfidence.isConfirmed(it.expiryDate, it.expiryDateConfidence, it.expiryDateManuallyEdited) }
+                .map { it.id }
+                .toSet()
+            val reminders = parseReminders(manifest.optJSONArray("reminders"), caseIds, documentIds, confirmedExpiryDocumentIds)
 
             writeRestoreJournal(
                 phase = "prepared",
@@ -307,6 +317,27 @@ class BackupService(private val context: Context) {
             val documentPages = pages.filter { it.documentId == id }
             require(documentPages.isNotEmpty()) { "Το έγγραφο δεν έχει σελίδες." }
             require(documentPages.all { it.entryName in stagedFiles }) { "Λείπει αρχείο από το έγγραφο." }
+            val legacyGlobalManual = item.optBoolean("metadataManuallyEdited", false)
+            val expiryManuallyEdited = item.optBoolean("expiryDateManuallyEdited", legacyGlobalManual)
+            val rawExpiry = item.optNullableString("expiryDate")
+            val rawExpiryConfidence = item.optString(
+                "expiryDateConfidence",
+                if (expiryManuallyEdited) MetadataConfidence.MANUAL else MetadataConfidence.UNKNOWN
+            )
+            val confirmedExpiry = rawExpiry?.takeIf {
+                MetadataConfidence.isConfirmed(it, rawExpiryConfidence, expiryManuallyEdited)
+            }
+            val expirySuggestion = item.optNullableString("expiryDateSuggestion")
+                ?: rawExpiry?.takeUnless { it == confirmedExpiry }
+            val expirySuggestionConfidence = item.optString(
+                "expiryDateSuggestionConfidence",
+                if (expirySuggestion != null) MetadataConfidence.LOW else MetadataConfidence.NONE
+            )
+            val titleManuallyEdited = item.optBoolean("titleManuallyEdited", legacyGlobalManual)
+            val categoryManuallyEdited = item.optBoolean("categoryManuallyEdited", legacyGlobalManual)
+            val providerManuallyEdited = item.optBoolean("providerManuallyEdited", legacyGlobalManual)
+            val issuedDateManuallyEdited = item.optBoolean("issuedDateManuallyEdited", legacyGlobalManual)
+            val protocolNumberManuallyEdited = item.optBoolean("protocolNumberManuallyEdited", legacyGlobalManual)
             result += DocumentEntity(
                 id = id,
                 title = item.getString("title").take(200),
@@ -318,7 +349,7 @@ class BackupService(private val context: Context) {
                 tags = item.optString("tags").take(500),
                 provider = item.optString("provider").take(200),
                 issuedDate = item.optNullableString("issuedDate"),
-                expiryDate = item.optNullableString("expiryDate"),
+                expiryDate = confirmedExpiry,
                 protocolNumber = item.optNullableString("protocolNumber"),
                 ocrText = item.optString("ocrText").take(MAX_OCR_TEXT),
                 extractedMetadataJson = item.optString("extractedMetadataJson").take(MAX_METADATA_JSON),
@@ -326,21 +357,21 @@ class BackupService(private val context: Context) {
                 processingError = item.optNullableString("processingError") ?: item.optString("processingState").let {
                     if (it == ProcessingState.QUEUED || it == ProcessingState.PROCESSING) "Η επεξεργασία δεν συνεχίστηκε μετά την επαναφορά. Επίλεξε επανάληψη OCR." else null
                 },
-                metadataManuallyEdited = item.optBoolean("metadataManuallyEdited", false),
-                expiryDateSuggestion = item.optNullableString("expiryDateSuggestion"),
-                expiryDateSuggestionConfidence = item.optString("expiryDateSuggestionConfidence", MetadataConfidence.NONE),
+                metadataManuallyEdited = legacyGlobalManual || titleManuallyEdited || categoryManuallyEdited || providerManuallyEdited || issuedDateManuallyEdited || expiryManuallyEdited || protocolNumberManuallyEdited,
+                expiryDateSuggestion = expirySuggestion,
+                expiryDateSuggestionConfidence = expirySuggestionConfidence,
                 titleConfidence = item.optString("titleConfidence", MetadataConfidence.UNKNOWN),
                 categoryConfidence = item.optString("categoryConfidence", MetadataConfidence.UNKNOWN),
                 providerConfidence = item.optString("providerConfidence", MetadataConfidence.UNKNOWN),
                 issuedDateConfidence = item.optString("issuedDateConfidence", MetadataConfidence.UNKNOWN),
-                expiryDateConfidence = item.optString("expiryDateConfidence", MetadataConfidence.UNKNOWN),
+                expiryDateConfidence = if (confirmedExpiry == null) MetadataConfidence.UNKNOWN else rawExpiryConfidence,
                 protocolNumberConfidence = item.optString("protocolNumberConfidence", MetadataConfidence.UNKNOWN),
-                titleManuallyEdited = item.optBoolean("titleManuallyEdited", item.optBoolean("metadataManuallyEdited", false)),
-                categoryManuallyEdited = item.optBoolean("categoryManuallyEdited", item.optBoolean("metadataManuallyEdited", false)),
-                providerManuallyEdited = item.optBoolean("providerManuallyEdited", item.optBoolean("metadataManuallyEdited", false)),
-                issuedDateManuallyEdited = item.optBoolean("issuedDateManuallyEdited", item.optBoolean("metadataManuallyEdited", false)),
-                expiryDateManuallyEdited = item.optBoolean("expiryDateManuallyEdited", item.optBoolean("metadataManuallyEdited", false)),
-                protocolNumberManuallyEdited = item.optBoolean("protocolNumberManuallyEdited", item.optBoolean("metadataManuallyEdited", false)),
+                titleManuallyEdited = titleManuallyEdited,
+                categoryManuallyEdited = categoryManuallyEdited,
+                providerManuallyEdited = providerManuallyEdited,
+                issuedDateManuallyEdited = issuedDateManuallyEdited,
+                expiryDateManuallyEdited = expiryManuallyEdited,
+                protocolNumberManuallyEdited = protocolNumberManuallyEdited,
                 createdAt = item.optLong("createdAt", System.currentTimeMillis()),
                 updatedAt = item.optLong("updatedAt", System.currentTimeMillis())
             )
@@ -427,12 +458,18 @@ class BackupService(private val context: Context) {
         }
     }
 
-    private fun parseReminders(array: JSONArray?, cases: Set<String>, documents: Set<String>): List<ReminderEntity> = buildList {
+    private fun parseReminders(
+        array: JSONArray?,
+        cases: Set<String>,
+        documents: Set<String>,
+        confirmedExpiryDocuments: Set<String>
+    ): List<ReminderEntity> = buildList {
         require(checkedLength(array) <= MAX_RESTORED_REMINDERS) { "Το αντίγραφο περιέχει υπερβολικά πολλές υπενθυμίσεις." }
         val seen = mutableSetOf<String>()
         for (i in 0 until checkedLength(array)) {
             val x = array!!.getJSONObject(i); val documentId = x.optNullableString("documentId")?.let(::requireSafeId); val caseId = x.optNullableString("caseId")?.let(::requireSafeId)
             require((documentId == null || documentId in documents) && (caseId == null || caseId in cases)) { "Το αντίγραφο περιέχει άκυρη υπενθύμιση." }
+            if (documentId != null && documentId !in confirmedExpiryDocuments) continue
             val id = requireSafeId(x.getString("id")); require(seen.add(id)) { "Το αντίγραφο περιέχει διπλή υπενθύμιση." }
             val dueAt = x.getLong("dueAt")
             require(dueAt in 0L..MAX_DUE_AT) { "Η υπενθύμιση έχει μη έγκυρη ημερομηνία." }
@@ -578,9 +615,9 @@ class BackupService(private val context: Context) {
     private object NullOutputStream : OutputStream() { override fun write(b: Int) = Unit; override fun write(b: ByteArray, off: Int, len: Int) = Unit }
 
     private companion object {
-        const val MAX_BACKUP_ENTRY_BYTES = 512L * 1024 * 1024
-        const val MAX_BACKUP_PAYLOAD_BYTES = 2L * 1024 * 1024 * 1024
-        const val MAX_BACKUP_ARCHIVE_BYTES = MAX_BACKUP_PAYLOAD_BYTES + 32L * 1024 * 1024
+        const val MAX_BACKUP_ENTRY_BYTES = BackupSizePolicy.MAX_ENTRY_BYTES
+        const val MAX_BACKUP_PAYLOAD_BYTES = BackupSizePolicy.MAX_PAYLOAD_BYTES
+        const val MAX_BACKUP_ARCHIVE_BYTES = BackupSizePolicy.MAX_ARCHIVE_BYTES
         const val MAX_BACKUP_ENTRIES = 10_000
         const val MAX_ENTRY_NAME = 300
         const val MAX_PAGE_INDEX = 100_000

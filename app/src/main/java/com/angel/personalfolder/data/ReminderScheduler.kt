@@ -80,7 +80,7 @@ object ReminderScheduler {
         // A past trigger is still a pending reminder. Scheduling it with zero
         // delay lets WorkManager deliver it after a missed run or permission
         // recovery instead of silently dropping it.
-        val delay = (reminder.dueAt - System.currentTimeMillis()).coerceAtLeast(0L)
+        val delay = ReminderDeliveryPolicy.initialDelayMs(reminder.dueAt, System.currentTimeMillis())
         val request = OneTimeWorkRequestBuilder<ReminderWorker>()
             .setInitialDelay(delay, TimeUnit.MILLISECONDS)
             .setInputData(workDataOf(ReminderWorker.KEY_REMINDER_ID to reminder.id))

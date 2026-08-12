@@ -222,6 +222,19 @@ abstract class AppDatabase : RoomDatabase() {
                 database.execSQL("ALTER TABLE documents ADD COLUMN expiryDateManuallyEdited INTEGER NOT NULL DEFAULT 0")
                 database.execSQL("ALTER TABLE documents ADD COLUMN protocolNumberManuallyEdited INTEGER NOT NULL DEFAULT 0")
 
+                // A version-3 automatic expiry was never verified by the user.
+                // Remove it from the authoritative column before exposing the
+                // upgraded database and retain it as an explicit suggestion.
+                // Reminders created from that value must not survive as if the
+                // deadline had been confirmed.
+                database.execSQL("DELETE FROM reminders WHERE documentId IN (SELECT id FROM documents WHERE metadataManuallyEdited = 0)")
+                database.execSQL("""
+                    UPDATE documents SET
+                        expiryDateSuggestion = CASE WHEN metadataManuallyEdited = 0 THEN expiryDate ELSE NULL END,
+                        expiryDateSuggestionConfidence = CASE WHEN metadataManuallyEdited = 0 AND expiryDate IS NOT NULL THEN 'low' ELSE 'none' END,
+                        expiryDate = CASE WHEN metadataManuallyEdited = 0 THEN NULL ELSE expiryDate END
+                """.trimIndent())
+
                 // Version 3 had only one global ownership flag. Treat fields that
                 // were explicitly edited under that contract as manually owned;
                 // all other old OCR values remain non-authoritative until re-read.

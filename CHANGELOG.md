@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.0.1
+
+### Integrity, PDF and OCR
+
+- Added Room `3→4` migration with per-field metadata confidence/manual ownership, expiry suggestions, reminder deadlines and repair of partial FTS indexes.
+- Added a shared filesystem/Room operation boundary, recoverable document-delete quarantine and conservative interrupted-restore recovery.
+- Fixed PDF rendering by compositing rendered pages onto opaque white ARGB bitmaps. Viewer and OCR now use independent bitmap pipelines; originals remain encrypted and unchanged.
+- Corrected protocol labels, provider hierarchy, UI category rules, OCR title application and expiry/reminder confidence handling.
+- Preserved past reminders for delivery after notification-permission recovery and kept the real deadline separate from the trigger date.
+
+### Verification and release
+
+- Added migration, recovery-policy, metadata, reminder and representative-PDF regression coverage.
+- CI now executes instrumentation tests on an Android emulator and uploads the debug APK before any release-signing gate.
+- Raised `versionCode` to 3 / `versionName` to 2.0.1 while preserving package identity and the explicit release signing policy.
+
 ## 2.0.0
 
 ### Data safety

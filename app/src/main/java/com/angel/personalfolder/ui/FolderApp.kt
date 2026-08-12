@@ -92,6 +92,7 @@ import com.angel.personalfolder.data.CaseEntity
 import com.angel.personalfolder.data.CaseStatus
 import com.angel.personalfolder.data.ChecklistItemEntity
 import com.angel.personalfolder.data.DocumentEntity
+import com.angel.personalfolder.data.DocumentSelectionPolicy
 import com.angel.personalfolder.data.MetadataConfidence
 import com.angel.personalfolder.data.ProcessingState
 import com.angel.personalfolder.data.ReminderEntity
@@ -266,7 +267,8 @@ private fun HomeScreen(
     onReminderDone: (String) -> Unit
 ) {
     val attention = documents.filter { document ->
-        document.expiryDate?.let { runCatching { LocalDate.parse(it).isBefore(LocalDate.now().plusDays(31)) }.getOrDefault(false) } == true
+        val confirmed = MetadataConfidence.isConfirmed(document.expiryDate, document.expiryDateConfidence, document.expiryDateManuallyEdited)
+        confirmed && document.expiryDate?.let { runCatching { LocalDate.parse(it).isBefore(LocalDate.now().plusDays(31)) }.getOrDefault(false) } == true
     }
     LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
@@ -344,7 +346,7 @@ private fun DocumentsScreen(
     var selectedIds by remember { mutableStateOf(emptySet<String>()) }
     LaunchedEffect(documents) {
         val visibleIds = documents.asSequence().map { it.id }.toSet()
-        selectedIds = selectedIds.intersect(visibleIds)
+        selectedIds = DocumentSelectionPolicy.retainVisible(selectedIds, visibleIds)
     }
     val hasActiveFilter = query.isNotBlank() || category.isNotBlank() || processingState.isNotBlank() || caseId != null || expiringSoon
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -427,20 +429,26 @@ private fun DocumentDetailScreen(document: DocumentEntity, viewModel: FolderView
         item { Button(onClick = { viewer = true }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Description, null); Spacer(Modifier.width(8.dp)); Text("Προβολή ολόκληρου εγγράφου") } }
         item { OutlinedButton(onClick = { onOpen(document.id) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.OpenInNew, null); Spacer(Modifier.width(8.dp)); Text("Άνοιγμα ως PDF σε άλλη εφαρμογή") } }
         item { OutlinedButton(onClick = { onShare(document.id) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Share, null); Spacer(Modifier.width(8.dp)); Text("Κοινοποίηση ολόκληρου εγγράφου") } }
-        if (document.expiryDate != null) item { InfoCard("Ημερομηνία λήξης", document.expiryDate, Icons.Default.CalendarMonth) }
-        if (document.expiryDateSuggestion != null) item {
+        val confirmedExpiry = document.expiryDate?.takeIf {
+            MetadataConfidence.isConfirmed(it, document.expiryDateConfidence, document.expiryDateManuallyEdited)
+        }
+        val unconfirmedExpiry = document.expiryDateSuggestion ?: document.expiryDate?.takeUnless {
+            MetadataConfidence.isConfirmed(it, document.expiryDateConfidence, document.expiryDateManuallyEdited)
+        }
+        if (confirmedExpiry != null) item { InfoCard("Ημερομηνία λήξης", confirmedExpiry, Icons.Default.CalendarMonth) }
+        if (unconfirmedExpiry != null) item {
             InfoCard(
                 "Πρόταση ημερομηνίας λήξης — δεν έχει επιβεβαιωθεί",
-                "${document.expiryDateSuggestion} (${confidenceLabel(document.expiryDateSuggestionConfidence)})",
+                "${unconfirmedExpiry} (${confidenceLabel(document.expiryDateSuggestionConfidence.ifBlank { document.expiryDateConfidence })})",
                 Icons.Default.WarningAmber
             )
         }
         if (document.provider.isNotBlank() || document.protocolNumber != null) item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Στοιχεία", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                if (document.provider.isNotBlank()) InfoRow("Φορέας", document.provider)
-                document.protocolNumber?.let { InfoRow("Αριθμός πρωτοκόλλου", it) }
-                document.issuedDate?.let { InfoRow("Ημερομηνία έκδοσης", it) }
+                if (document.provider.isNotBlank()) InfoRow("Φορέας (${confidenceLabel(document.providerConfidence)})", document.provider)
+                document.protocolNumber?.let { InfoRow("Αριθμός πρωτοκόλλου (${confidenceLabel(document.protocolNumberConfidence)})", it) }
+                document.issuedDate?.let { InfoRow("Ημερομηνία έκδοσης (${confidenceLabel(document.issuedDateConfidence)})", it) }
                 InfoRow("Βεβαιότητα κατηγορίας", confidenceLabel(document.categoryConfidence))
             }
         }
@@ -576,7 +584,7 @@ private fun SettingsScreen(lockEnabled: Boolean, onEnableLock: () -> Unit, onDis
                 }
             }
         }
-        item { Text("Έκδοση 2.0.0 · Ελληνικό περιβάλλον · Λειτουργία χωρίς σύνδεση", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) }
+        item { Text("Έκδοση 2.0.1 · Ελληνικό περιβάλλον · Λειτουργία χωρίς σύνδεση", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) }
     }
 }
 
@@ -598,7 +606,7 @@ private fun <T> FilterMenuChip(label: String, selectedLabel: String, options: Li
 private fun SectionHeader(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) { Row(Modifier.fillMaxWidth().clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(8.dp)); Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)); Icon(Icons.Default.ArrowForward, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) } }
 
 @Composable
-private fun DocumentCard(document: DocumentEntity, onClick: () -> Unit, selected: Boolean = false, onToggleSelection: (() -> Unit)? = null) { Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Surface(Modifier.size(44.dp), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Description, null, tint = MaterialTheme.colorScheme.onPrimaryContainer) } }; Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(document.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(document.category, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp); if (document.processingState == ProcessingState.PROCESSING) Text("Γίνεται επεξεργασία…", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp) }; document.expiryDate?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }; onToggleSelection?.let { toggle -> androidx.compose.material3.Checkbox(checked = selected, onCheckedChange = { toggle() }) } } } }
+private fun DocumentCard(document: DocumentEntity, onClick: () -> Unit, selected: Boolean = false, onToggleSelection: (() -> Unit)? = null) { Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Surface(Modifier.size(44.dp), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Description, null, tint = MaterialTheme.colorScheme.onPrimaryContainer) } }; Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(document.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(document.category, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp); if (document.processingState == ProcessingState.PROCESSING) Text("Γίνεται επεξεργασία…", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp) }; document.expiryDate?.takeIf { MetadataConfidence.isConfirmed(it, document.expiryDateConfidence, document.expiryDateManuallyEdited) }?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }; onToggleSelection?.let { toggle -> androidx.compose.material3.Checkbox(checked = selected, onCheckedChange = { toggle() }) } } } }
 
 @Composable
 private fun CaseCard(caseEntity: CaseEntity, onClick: () -> Unit) { Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Assignment, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(caseEntity.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(caseEntity.nextStep.ifBlank { caseEntity.description.ifBlank { "Χωρίς επόμενο βήμα" } }, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }; AssistChip(onClick = {}, label = { Text(caseEntity.status, fontSize = 11.sp) }) } } }

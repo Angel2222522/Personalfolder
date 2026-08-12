@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 import com.angel.personalfolder.data.DocumentEntity
+import com.angel.personalfolder.data.DocumentPageDisplayPolicy
 import com.angel.personalfolder.data.DocumentRenderService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -100,7 +101,7 @@ fun DocumentViewerScreen(document: DocumentEntity, onClose: () -> Unit) {
                     TextButton(onClick = onClose) { Text("Κλείσιμο") }
                 }
                 pages.isEmpty() -> CircularProgressIndicator()
-                bitmap == null || bitmapPageIndex != pageIndex -> CircularProgressIndicator()
+                bitmap == null || !DocumentPageDisplayPolicy.canDisplay(pageIndex, bitmapPageIndex) -> CircularProgressIndicator()
                 else -> Image(
                     bitmap!!.asImageBitmap(),
                     contentDescription = "Σελίδα ${pageIndex + 1}",
