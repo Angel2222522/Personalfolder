@@ -64,14 +64,12 @@ jobs:
           emulator-boot-timeout: 900
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -wipe-data
           disable-animations: true
-          script: |
-            set +e
-            gradle connectedDebugAndroidTest --stacktrace
-            status=$?
-            adb logcat -d -b all -v threadtime > "$RUNNER_TEMP/personal-folder-instrumentation-logcat.txt" || true
-            echo "--- Recent device logcat after instrumentation failure ---"
-            tail -n 400 "$RUNNER_TEMP/personal-folder-instrumentation-logcat.txt" || true
-            exit "$status"
+          # The emulator runner executes each newline in `script` in a
+          # separate shell. Keep status capture and diagnostics in one shell
+          # so a successful Gradle test run cannot turn into `exit: Illegal
+          # number`, while a real test failure still fails the job.
+          script: >-
+            sh -c 'set +e; gradle connectedDebugAndroidTest --stacktrace; status=$?; adb logcat -d -b all -v threadtime > "$RUNNER_TEMP/personal-folder-instrumentation-logcat.txt" || true; echo "--- Recent device logcat after instrumentation failure ---"; tail -n 400 "$RUNNER_TEMP/personal-folder-instrumentation-logcat.txt" || true; exit "$status"'
 
       - name: Upload debug APK
         if: always()
@@ -108,3 +106,75 @@ jobs:
             if [ -z "$value" ]; then
               echo "Permanent Personal Folder release signing secrets are missing. Refusing to produce a release APK."
               exit 1
+            fi
+          done
+
+          KEYSTORE_PATH="$RUNNER_TEMP/personal-folder-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+
+          EXPECTED_SHA256="2642FD5E5E43A90EB6DA7B3462E14313BE9DA8C479ECAABC404076071F0A049B"
+          ACTUAL_SHA256=$(keytool -list -v \
+            -keystore "$KEYSTORE_PATH" \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS" \
+            | sed -n 's/^[[:space:]]*SHA256: //p' \
+            | head -n 1 \
+            | tr -d ':' \
+            | tr '[:lower:]' '[:upper:]')
+
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "Signing certificate does not match the permanent Personal Folder certificate. Refusing release."
+            exit 1
+          fi
+
+          echo "PERSONAL_FOLDER_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "PERSONAL_FOLDER_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "PERSONAL_FOLDER_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "PERSONAL_FOLDER_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Build permanently signed release APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: gradle assembleRelease
+
+      - name: Verify permanent release signature
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "Signed release APK not found."
+            exit 1
+          fi
+          if [[ "$(basename "$APK")" == *unsigned* ]]; then
+            echo "Release APK is unsigned. Refusing artifact upload."
+            exit 1
+          fi
+
+          apksigner verify --verbose --print-certs "$APK"
+          EXPECTED_SHA256="2642FD5E5E43A90EB6DA7B3462E14313BE9DA8C479ECAABC404076071F0A049B"
+          APK_SHA256=$(apksigner verify --print-certs "$APK" \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
+            | head -n 1 \
+            | tr -d ':' \
+            | tr '[:lower:]' '[:upper:]')
+
+          if [ "$APK_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "Built APK is not signed with the permanent Personal Folder certificate."
+            exit 1
+          fi
+
+      - name: Upload permanently signed release APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-folder-signed-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Upload Room schemas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-folder-room-schemas
+          path: app/schemas/
+          if-no-files-found: ignore
