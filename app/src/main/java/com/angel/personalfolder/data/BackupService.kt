@@ -138,9 +138,7 @@ class BackupService(private val context: Context) {
                         }
                     }
                 }
-                require(zip.length() in 1..MAX_BACKUP_ARCHIVE_BYTES) {
-                    "Το αντίγραφο είναι υπερβολικά μεγάλο."
-                }
+                BackupSizePolicy.requireArchiveSize(zip.length())
                 BackupCrypto.encryptFile(zip, context, destination, password.toCharArray())
                 true
             } finally {
@@ -589,7 +587,7 @@ class BackupService(private val context: Context) {
                     val data = if (name == "backup.json") input.readLimited(MAX_MANIFEST_BYTES) else null
                     if (data != null) manifest = data.toString(Charsets.UTF_8) else input.discardLimited(MAX_BACKUP_ENTRY_BYTES)
                     totalBytes += entryBytesRead
-                    require(totalBytes <= MAX_BACKUP_ARCHIVE_BYTES) { "Το αντίγραφο είναι υπερβολικά μεγάλο." }
+                    BackupSizePolicy.requirePayloadSize(totalBytes)
                 }
                 input.closeEntry(); entry = input.nextEntry
             }
@@ -699,7 +697,6 @@ class BackupService(private val context: Context) {
     private companion object {
         const val MAX_BACKUP_ENTRY_BYTES = BackupSizePolicy.MAX_ENTRY_BYTES
         const val MAX_BACKUP_PAYLOAD_BYTES = BackupSizePolicy.MAX_PAYLOAD_BYTES
-        const val MAX_BACKUP_ARCHIVE_BYTES = BackupSizePolicy.MAX_ARCHIVE_BYTES
         const val MAX_BACKUP_ENTRIES = 10_000
         const val MAX_ENTRY_NAME = 300
         const val MAX_PAGE_INDEX = 100_000

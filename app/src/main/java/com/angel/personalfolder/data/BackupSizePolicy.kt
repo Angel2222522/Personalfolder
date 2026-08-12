@@ -13,4 +13,8 @@ object BackupSizePolicy {
     fun requirePayloadSize(size: Long) {
         require(size in 0L..MAX_PAYLOAD_BYTES) { "Το αντίγραφο είναι υπερβολικά μεγάλο." }
     }
+
+    fun requireArchiveSize(size: Long) {
+        require(size in 1L..MAX_ARCHIVE_BYTES) { "Το αντίγραφο είναι υπερβολικά μεγάλο." }
+    }
 }
