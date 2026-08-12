@@ -55,7 +55,11 @@ class OcrWorkerIntegrationTest {
 
     @Test
     fun workerReadsGreekImagePersistsTextAndUpdatesSearchIndex() = runBlocking {
-        val source = createTextImage("ΔΗΜΟΣ ΘΕΣΣΑΛΟΝΙΚΗΣ", "Αριθμός πρωτοκόλλου: AB-123/2026")
+        val source = createTextImage(
+            "ΔΗΜΟΣ ΘΕΣΣΑΛΟΝΙΚΗΣ",
+            "Αριθμός πρωτοκόλλου: AB-123/2026",
+            "Ημερομηνία έκδοσης: 03/08/2026"
+        )
         insertDocument(source, "image/png", "greek.png")
 
         val result = runWorker()
