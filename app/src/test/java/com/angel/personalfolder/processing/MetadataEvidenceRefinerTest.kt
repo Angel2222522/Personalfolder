@@ -127,4 +127,37 @@ class MetadataEvidenceRefinerTest {
 
         assertEquals("ΛΗΞΙΑΡΧΕΙΟ ΔΟΚΙΜΗΣ", refined.provider)
     }
+
+    @Test
+    fun bankAccountStatementIsFinancialRatherThanUtilityAccount() {
+        val text = """
+            SampleBank
+            ΚΑΘΗΜΕΡΙΝΟΣ ΛΟΓΑΡΙΑΣΜΟΣ PLUS
+            IBAN: GR0000000000000000000000000
+            BIC: SAMPLEXXX
+            Previous Balance 100.00
+        """.trimIndent()
+        val raw = MetadataExtractor.extract(text, "synthetic-bank-statement.pdf")
+
+        assertEquals("Λογαριασμοί", raw.category)
+
+        val refined = MetadataEvidenceRefiner.refine(raw, text)
+
+        assertEquals("Οικονομικά", refined.category)
+        assertEquals("high", refined.categoryConfidence)
+    }
+
+    @Test
+    fun utilityAccountIsNotPromotedWithoutBankIssuer() {
+        val text = """
+            ΔΕΗ
+            ΛΟΓΑΡΙΑΣΜΟΣ ΡΕΥΜΑΤΟΣ
+            Κωδικός πληρωμής: TEST-000
+        """.trimIndent()
+        val raw = MetadataExtractor.extract(text, "synthetic-utility.pdf")
+
+        val refined = MetadataEvidenceRefiner.refine(raw, text)
+
+        assertEquals("Λογαριασμοί", refined.category)
+    }
 }

@@ -88,11 +88,20 @@ object MetadataEvidenceRefiner {
         val providerConfidence = if (registryQualifier != null) MetadataConfidence.HIGH else metadata.providerConfidence
         val providerProvenance = if (registryQualifier != null) "registry-office-layout" else metadata.providerProvenance
 
+        // A bank account statement is financial, not a utility bill merely
+        // because its title contains the generic word "λογαριασμός". Require a
+        // bank issuer plus account/statement evidence before promoting it.
+        val financialAccountStatement = shouldPromoteFinancialAccountCategory(provider, metadata.title, evidence)
+        val category = if (financialAccountStatement) "Οικονομικά" else metadata.category
+        val categoryConfidence = if (financialAccountStatement) MetadataConfidence.HIGH else metadata.categoryConfidence
+
         val refined = metadata.copy(
+            category = category,
             provider = provider,
             issuedDate = issuedDate,
             expiryDate = expiryDate,
             protocolNumber = protocolNumber,
+            categoryConfidence = categoryConfidence,
             providerConfidence = providerConfidence,
             issuedConfidence = issuedConfidence,
             expiryConfidence = expiryConfidence,
@@ -161,6 +170,17 @@ object MetadataEvidenceRefiner {
         val folded = fold(value)
         if (REGISTRY_QUALIFIER_NOISE.any(folded::contains)) return false
         return true
+    }
+
+    private fun shouldPromoteFinancialAccountCategory(provider: String, title: String, text: String): Boolean {
+        val foldedProvider = fold(provider)
+        val foldedTitle = fold(title)
+        val foldedText = fold(text)
+        val bankIssuer = foldedProvider.contains("bank") || foldedProvider.contains("τραπεζ")
+        if (!bankIssuer) return false
+        val accountHeading = foldedTitle.contains("λογαριασμ") || foldedTitle.contains("statement")
+        val bankStructure = foldedText.contains("iban") && foldedText.contains("bic")
+        return accountHeading || bankStructure
     }
 
     private fun normalizeProtocolCandidate(raw: String): String? {
