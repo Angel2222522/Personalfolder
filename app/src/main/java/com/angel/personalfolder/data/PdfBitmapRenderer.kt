@@ -8,33 +8,55 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Renders one PDF page into an opaque display/OCR input bitmap.
- *
- * PdfRenderer may leave pixels transparent when a PDF page has no explicit
- * background. Filling the ARGB bitmap first prevents those pixels from being
- * composited as black by a viewer or OCR engine. The returned bitmap is a new
- * buffer owned by the caller; it is never the encrypted source or a viewer
- * cache shared with another pipeline.
+ * Renders one PDF page into an opaque bitmap without ever modifying the source PDF.
+ * Display rendering remains conservative, while OCR can request an accuracy-first
+ * raster close to 300 DPI for small/normal document pages.
  */
 object PdfBitmapRenderer {
-    fun render(page: PdfRenderer.Page, maxDimension: Int): Bitmap {
-        val scale = minOf(
-            3f,
-            maxDimension.toFloat() / max(page.width, page.height).coerceAtLeast(1)
+    fun render(page: PdfRenderer.Page, maxDimension: Int): Bitmap =
+        renderInternal(
+            page = page,
+            maxDimension = maxDimension,
+            preferredScale = DISPLAY_MAX_SCALE,
+            renderMode = PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY
         )
+
+    fun renderForOcr(
+        page: PdfRenderer.Page,
+        maxDimension: Int = OCR_MAX_DIMENSION,
+        targetDpi: Int = OCR_TARGET_DPI
+    ): Bitmap {
+        require(targetDpi > 0) { "Το DPI OCR πρέπει να είναι θετικό." }
+        val preferredScale = targetDpi / PDF_POINTS_PER_INCH
+        return renderInternal(
+            page = page,
+            maxDimension = maxDimension,
+            preferredScale = preferredScale,
+            renderMode = PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY
+        )
+    }
+
+    private fun renderInternal(
+        page: PdfRenderer.Page,
+        maxDimension: Int,
+        preferredScale: Float,
+        renderMode: Int
+    ): Bitmap {
+        require(maxDimension > 0) { "Η μέγιστη διάσταση πρέπει να είναι θετική." }
+        val longestPageSide = max(page.width, page.height).coerceAtLeast(1)
+        val dimensionScale = maxDimension.toFloat() / longestPageSide
+        val scale = minOf(preferredScale, dimensionScale).coerceAtLeast(MIN_RENDER_SCALE)
         val rendered = Bitmap.createBitmap(
             (page.width * scale).roundToInt().coerceAtLeast(1),
             (page.height * scale).roundToInt().coerceAtLeast(1),
             Bitmap.Config.ARGB_8888
         )
-        // Do this before rendering. It is intentional that the bitmap is
-        // opaque white instead of relying on the PDF's transparency state.
-        rendered.eraseColor(Color.WHITE)
-        page.render(rendered, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
-        // Composite once more onto an opaque surface. Some PDF pages contain
-        // transparent pixels and PdfRenderer is allowed to preserve alpha;
-        // this final composition makes their visual result deterministic.
+        // PdfRenderer may preserve transparency. OCR must always receive a
+        // deterministic white page rather than transparent pixels rendered dark.
+        rendered.eraseColor(Color.WHITE)
+        page.render(rendered, null, null, renderMode)
+
         val opaque = Bitmap.createBitmap(rendered.width, rendered.height, Bitmap.Config.ARGB_8888)
         Canvas(opaque).apply {
             drawColor(Color.WHITE)
@@ -44,4 +66,10 @@ object PdfBitmapRenderer {
         rendered.recycle()
         return opaque
     }
+
+    private const val DISPLAY_MAX_SCALE = 3f
+    private const val OCR_TARGET_DPI = 300
+    private const val OCR_MAX_DIMENSION = 3_600
+    private const val PDF_POINTS_PER_INCH = 72f
+    private const val MIN_RENDER_SCALE = 0.25f
 }
