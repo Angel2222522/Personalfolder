@@ -14,11 +14,23 @@ class TesseractOcrEngine(private val context: Context) {
         val dataPath = withContext(Dispatchers.IO) { prepareDataPath() }
         val tess = TessBaseAPI()
         try {
-            check(tess.init(dataPath.absolutePath, "ell+eng")) {
+            val configuration = mapOf(
+                "preserve_interword_spaces" to "1",
+                "user_defined_dpi" to OCR_DPI.toString()
+            )
+            check(
+                tess.init(
+                    dataPath.absolutePath,
+                    "ell+eng",
+                    TessBaseAPI.OEM_LSTM_ONLY,
+                    configuration
+                )
+            ) {
                 "Δεν φορτώθηκαν τα ελληνικά/αγγλικά δεδομένα OCR."
             }
+            tess.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO)
             tess.setImage(bitmap)
-            tess.getUTF8Text().orEmpty().trim()
+            OcrTextPostProcessor.normalizeOcrText(tess.getUTF8Text().orEmpty())
         } finally {
             tess.recycle()
         }
@@ -76,7 +88,8 @@ class TesseractOcrEngine(private val context: Context) {
     private companion object {
         val modelLock = Mutex()
         val REQUIRED_MODELS = setOf("ell.traineddata", "eng.traineddata")
-        const val MODEL_BUNDLE_VERSION = "tessdata-fast-87416418657359cb"
-        const val MIN_TRAINEDDATA_BYTES = 1_000_000L
+        const val MODEL_BUNDLE_VERSION = "tessdata-best-e12c65a915945e4c"
+        const val MIN_TRAINEDDATA_BYTES = 5_000_000L
+        const val OCR_DPI = 300
     }
 }
