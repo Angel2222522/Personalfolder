@@ -117,10 +117,13 @@ class DocumentProcessor(private val context: Context, private val database: AppD
             }
 
             val fullText = fullTextBuilder.toString().trim()
-            val metadata = MetadataExtractor.extract(
-                fullText,
-                document.title,
-                metadataAssistBuilder.toString()
+            val metadata = MetadataEvidenceRefiner.refine(
+                MetadataExtractor.extract(
+                    fullText,
+                    document.title,
+                    metadataAssistBuilder.toString()
+                ),
+                fullText
             )
 
             if (fullText.isBlank()) {
