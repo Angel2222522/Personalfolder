@@ -72,6 +72,64 @@ class RepositoryImportDeleteExportTest {
     }
 
     @Test
+    fun exportZipKeepsEverySourceOfOneDocument() = runBlocking {
+        val id = "export-multi-${UUID.randomUUID()}"
+        val root = context.filesDir.resolve("documents/$id").apply { mkdirs() }
+        val sources = listOf(
+            root.resolve("page_0.pf") to "first source",
+            root.resolve("page_1.pf") to "second source"
+        )
+        val destination = context.cacheDir.resolve("share/${id}-${UUID.randomUUID()}.zip").apply {
+            parentFile?.mkdirs()
+        }
+        val destinationUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", destination)
+        try {
+            sources.forEach { (file, text) ->
+                FileCrypto.encrypt(ByteArrayInputStream(text.toByteArray(StandardCharsets.UTF_8)), file)
+            }
+            val now = System.currentTimeMillis()
+            database.withTransaction {
+                database.documentDao().insert(
+                    DocumentEntity(
+                        id = id,
+                        title = id,
+                        originalFileName = "first.png",
+                        mimeType = "image/png",
+                        encryptedPath = sources.first().first.absolutePath,
+                        pageCount = 2,
+                        processingState = ProcessingState.PROCESSED,
+                        createdAt = now,
+                        updatedAt = now
+                    )
+                )
+                database.documentPageDao().insertAll(
+                    sources.mapIndexed { index, (file, _) ->
+                        DocumentPageEntity(id, index, file.absolutePath, sourceFileName = "source-$index.png", mimeType = "image/png")
+                    }
+                )
+            }
+
+            ExportService(context).exportDocuments(destinationUri, listOf(id))
+            val entries = linkedMapOf<String, ByteArray>()
+            ZipInputStream(FileInputStream(destination)).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    entries[entry.name] = zip.readBytes()
+                }
+            }
+            assertEquals("first source", String(entries["documents/$id/page_1.png"]!!, StandardCharsets.UTF_8))
+            assertEquals("second source", String(entries["documents/$id/page_2.png"]!!, StandardCharsets.UTF_8))
+        } finally {
+            destination.delete()
+            database.withTransaction {
+                database.documentPageDao().deleteForDocument(id)
+                database.documentDao().deleteById(id)
+            }
+            FileCrypto.deleteRecursively(root)
+        }
+    }
+
+    @Test
     fun deleteRemovesRoomRowsAndPrivateDocumentTree() = runBlocking {
         val fixture = insertFixture("delete-${UUID.randomUUID()}", "delete-source.png", "delete me")
         val root = context.filesDir.resolve("documents/${fixture.id}")

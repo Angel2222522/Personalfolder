@@ -67,17 +67,7 @@ class AppDatabaseMigrationTest {
     fun refusesOrphanRowsBeforeDestructiveMigrationAndLeavesLegacyDataIntact() {
         val orphanDatabaseName = "migration_orphan_${System.nanoTime()}.db"
         createLegacyDatabase(orphanDatabaseName, withOrphanPage = true)
-        var migrationFailed = false
-        val database = Room.databaseBuilder(context, AppDatabase::class.java, orphanDatabaseName)
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
-            .build()
-        try {
-            database.openHelper.writableDatabase
-        } catch (_: Throwable) {
-            migrationFailed = true
-        } finally {
-            database.close()
-        }
+        val migrationFailed = migrationFails(orphanDatabaseName)
         assertTrue("The migration must fail closed instead of dropping orphan rows", migrationFailed)
 
         SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(orphanDatabaseName), null).use { legacy ->
@@ -92,7 +82,58 @@ class AppDatabaseMigrationTest {
         context.deleteDatabase(orphanDatabaseName)
     }
 
-    private fun createLegacyDatabase(name: String = databaseName, withOrphanPage: Boolean = false, version: Int = 1) {
+    @Test
+    fun refusesOrphanChecklistAndReminderReferencesBeforeDestructiveMigration() {
+        val cases = listOf(
+            "checklist" to Triple(true, false, false),
+            "reminder-document" to Triple(false, true, false),
+            "reminder-case" to Triple(false, false, true)
+        )
+        cases.forEach { (label, flags) ->
+            val name = "migration_orphan_${label}_${System.nanoTime()}.db"
+            createLegacyDatabase(
+                name,
+                withOrphanChecklistLink = flags.first,
+                withOrphanReminderDocument = flags.second,
+                withOrphanReminderCase = flags.third
+            )
+            try {
+                assertTrue("Migration must reject orphan $label references", migrationFails(name))
+                SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(name), null).use { legacy ->
+                    legacy.rawQuery("PRAGMA user_version", null).use { cursor ->
+                        assertTrue(cursor.moveToFirst())
+                        assertEquals(1, cursor.getInt(0))
+                    }
+                }
+            } finally {
+                context.deleteDatabase(name)
+            }
+        }
+    }
+
+    private fun migrationFails(name: String): Boolean {
+        var failed = false
+        val database = Room.databaseBuilder(context, AppDatabase::class.java, name)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
+            .build()
+        try {
+            database.openHelper.writableDatabase
+        } catch (_: Throwable) {
+            failed = true
+        } finally {
+            database.close()
+        }
+        return failed
+    }
+
+    private fun createLegacyDatabase(
+        name: String = databaseName,
+        withOrphanPage: Boolean = false,
+        withOrphanChecklistLink: Boolean = false,
+        withOrphanReminderDocument: Boolean = false,
+        withOrphanReminderCase: Boolean = false,
+        version: Int = 1
+    ) {
         val file: File = context.getDatabasePath(name)
         file.parentFile?.mkdirs()
         SQLiteDatabase.openOrCreateDatabase(file, null).use { database ->
@@ -126,8 +167,11 @@ class AppDatabaseMigrationTest {
             database.execSQL("INSERT INTO case_documents VALUES ('case-1','doc-1')")
             database.execSQL("INSERT INTO timeline_events VALUES ('event-1','case-1','Γεγονός','','manual','2026-01-02',2)")
             database.execSQL("INSERT INTO checklist_items VALUES ('check-1','case-1','Δικαιολογητικό',0,'doc-1',2)")
+            if (withOrphanChecklistLink) database.execSQL("INSERT INTO checklist_items VALUES ('check-orphan','case-1','Ορφανό',0,'missing-doc',2)")
             database.execSQL("INSERT INTO reminders VALUES ('rem-doc','Υπενθύμιση εγγράφου',4102444800000,'doc-1',NULL,0,0)")
             database.execSQL("INSERT INTO reminders VALUES ('rem-case','Υπενθύμιση υπόθεσης',4102444800000,NULL,'case-1',0,0)")
+            if (withOrphanReminderDocument) database.execSQL("INSERT INTO reminders VALUES ('rem-orphan-doc','Ορφανή υπενθύμιση',4102444800000,'missing-doc',NULL,0,0)")
+            if (withOrphanReminderCase) database.execSQL("INSERT INTO reminders VALUES ('rem-orphan-case','Ορφανή υπόθεση',4102444800000,NULL,'missing-case',0,0)")
             database.execSQL("PRAGMA user_version = $version")
         }
     }
