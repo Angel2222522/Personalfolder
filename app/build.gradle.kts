@@ -29,10 +29,10 @@ fun gitBlobSha1(file: File): String {
     return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
 }
 
-val tesseractDataCommit = "87416418657359cb625c412a48b6e1d6d41c29bd"
+val tesseractDataCommit = "e12c65a915945e4c28e237a9b52bc4a8f39a0cec"
 val ocrModels = listOf(
-    OcrModel("ell.traineddata", 1_419_514L, "ed98ae1a88d84414da316e6eeab3232f2c68639b"),
-    OcrModel("eng.traineddata", 4_113_088L, "bbef4675053b5b468cdb477053e28b1c698ba08e")
+    OcrModel("ell.traineddata", 8_945_021L, "f6f73870885f4fd6e63371244c7f3d5904e1b276"),
+    OcrModel("eng.traineddata", 15_400_601L, "176dc3220de7db34d3b3aecbfa42043a6038348b")
 )
 val generatedOcrAssetsDir = layout.buildDirectory.dir("generated/ocrAssets")
 
@@ -51,7 +51,7 @@ val prepareOcrModels = tasks.register("prepareOcrModels") {
 
             val temporary = File(tessdata, ".${model.name}.part")
             temporary.delete()
-            val url = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/$tesseractDataCommit/${model.name}"
+            val url = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/$tesseractDataCommit/${model.name}"
             val connection = URI(url).toURL().openConnection().apply {
                 connectTimeout = 30_000
                 readTimeout = 60_000
