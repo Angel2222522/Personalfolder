@@ -13,6 +13,7 @@ import com.angel.personalfolder.data.BackupService
 import com.angel.personalfolder.data.ExportService
 import com.angel.personalfolder.data.FolderRepository
 import com.angel.personalfolder.data.MetadataFieldConfirmations
+import com.angel.personalfolder.data.ReminderScheduler
 import com.angel.personalfolder.data.TimelineEventEntity
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,7 +39,7 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     private val _processingState = MutableStateFlow("")
     private val _caseId = MutableStateFlow<String?>(null)
     private val _expiringSoon = MutableStateFlow(false)
-    val category: StateFlow<String> = _category.asStateFlow()
+    val category: StateFlow<String> = _category.asStateStateFlow()
     val processingState: StateFlow<String> = _processingState.asStateFlow()
     val caseId: StateFlow<String?> = _caseId.asStateFlow()
     val expiringSoon: StateFlow<Boolean> = _expiringSoon.asStateFlow()
@@ -131,8 +132,10 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun updateCaseStatus(id: String, status: String) = viewModelScope.launch {
-        suspendRunCatching { repository.updateCaseStatus(id, status) }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αλλαγή κατάστασης.") }
+        suspendRunCatching {
+            repository.updateCaseStatus(id, status)
+            ReminderScheduler.reconcileForCase(getApplication(), id)
+        }.onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αλλαγή κατάστασης.") }
     }
 
     fun addTimelineEvent(caseId: String, title: String, note: String) = viewModelScope.launch {
