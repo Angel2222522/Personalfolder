@@ -33,7 +33,9 @@ class BackupSizePolicyTest {
             mimeType = "application/pdf",
             encryptedPath = "/private/doc-1/page_0.pf",
             pageCount = 2,
-            ocrText = "κείμενο"
+            ocrText = "κείμενο",
+            createdAt = 1L,
+            updatedAt = 1L
         )
         val pages = listOf(
             DocumentPageEntity("doc-1", 0, document.encryptedPath, "σελίδα 1", "source.pdf", "application/pdf"),
@@ -51,7 +53,9 @@ class BackupSizePolicyTest {
             originalFileName = "source.png",
             mimeType = "image/png",
             encryptedPath = "/private/doc-1/page_0.pf",
-            pageCount = 1
+            pageCount = 1,
+            createdAt = 1L,
+            updatedAt = 1L
         )
 
         assertThrows(IllegalArgumentException::class.java) {
