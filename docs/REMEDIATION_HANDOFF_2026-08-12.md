@@ -1,5 +1,10 @@
 # Personal Folder remediation handoff — 2026-08-12
 
+> Historical handoff retained for provenance. It describes the earlier
+> remediation branch and is superseded by the current audit status file
+> `CODE_AUDIT_REMEDIATION_STATUS.md` on
+> `codex/personal-folder-audit-remediation`.
+
 This file is the continuation checkpoint for the two-part remediation requested for the Personal Folder Android application.
 
 ## Scope of Part 1

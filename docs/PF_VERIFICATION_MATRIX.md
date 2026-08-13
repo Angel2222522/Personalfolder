@@ -1,5 +1,10 @@
 # Personal Folder remediation matrix — PF-001 to PF-032
 
+> Historical matrix from the earlier `codex/personal-folder-remediation` phase.
+> It is retained for provenance, but its “Fixed” labels and run #89 are not
+> evidence for the current `PF-AUD-001`–`PF-AUD-020` remediation. The current
+> authoritative record is `CODE_AUDIT_REMEDIATION_STATUS.md`.
+
 This is the Part 2 evidence matrix for branch `codex/personal-folder-remediation`.
 “Fixed” means the current source has a targeted regression test or an existing
 runtime test. “Open product decision” is intentionally not treated as fixed.
