@@ -40,7 +40,7 @@ object MetadataExtractor {
     )
     private val datelineContextRegex = Regex("""^[\p{L}\p{M} .΄'’\-]{2,50}[:,]\s*$""")
     private val schoolProviderAnchor = Regex(
-        """\b\d{1,3}\s*[οo0]?\s*(?:Γυμνάσιο|Λύκειο|Δημοτικό)\b""",
+        """(?<![\p{L}\d])\d{1,3}\s*(?:ο|ου|o|0)?\s*(?:Γυμνάσιο|Γυμνασίου|Γυμνασιο|Γυμνασιου|Λύκειο|Λυκείου|Λυκειο|Λυκειου|(?:Δημοτικό|Δημοτικού|Δημοτικο|Δημοτικου)\s*(?:Σχολείο|Σχολείου|Σχολειο|Σχολειου))(?![\p{L}\d])""",
         RegexOption.IGNORE_CASE
     )
     private val schoolProviderStop = Regex(
@@ -49,6 +49,17 @@ object MetadataExtractor {
     )
     private val documentTypeLabelRegex = Regex(
         """^(?:ΕΙΔΟΣ\s+ΠΑΡΑΣΤΑΤΙΚΟΥ|ΤΥΠΟΣ\s+ΕΓΓΡΑΦΟΥ|DOCUMENT\s+TYPE)\s*[:\-]\s*(.+)$""",
+        RegexOption.IGNORE_CASE
+    )
+    private val providerParallelFieldRegex = Regex(
+        """(?:εδρα\s*:|αρ\.?\s*αδειας\s*:|αρ\.?\s*πρωτ(?:\.|οκ(?:ολλου)?)?\s*:|αριθ\.?\s*πρωτ(?:\.|οκ(?:ολλου)?)?\s*:|αρ\.?\s*φακελου\s*:|ε\.?\s*κ\.?\s*α\.?\s*:|αρ\.?\s*ταυτ\.?\s*στοιχειου\s*:|αριθμος\s+βεβαιωσης\s*:|κωδικος\s+ηλεκτρονικης\s+πληρωμης|iban\s*:?)"""
+    )
+    private val bankPairRegex = Regex(
+        """\b([\p{L}][\p{L}\d._-]{2,})\s+bank\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val compoundBankRegex = Regex(
+        """\b[\p{L}\d._-]{3,}bank\b""",
         RegexOption.IGNORE_CASE
     )
 
@@ -172,10 +183,10 @@ object MetadataExtractor {
             else -> MetadataConfidence.MEDIUM
         }
 
-        val providerCandidate = lines.mapIndexedNotNull { index, line ->
-            val candidateValue = extractSpecificProvider(line)
-            providerScore(candidateValue)?.let { score -> ProviderCandidate(candidateValue.take(120), score, index) }
-        }.maxWithOrNull(compareBy<ProviderCandidate> { it.score }.thenByDescending { it.value.length }.thenBy { it.index })
+        val providerCandidate = lines.mapIndexedNotNull { index, _ ->
+            val candidateValue = extractSpecificProvider(lines, index)
+            providerScore(candidateValue)?.let { score -> ProviderCandidate(candidateValue.take(MAX_PROVIDER_LENGTH), score, index) }
+        }.maxWithOrNull(compareBy<ProviderCandidate> { it.score }.thenBy { -it.index })
         val provider = providerCandidate?.value.orEmpty()
         val providerConfidence = when {
             providerCandidate == null -> MetadataConfidence.UNKNOWN
@@ -290,11 +301,90 @@ object MetadataExtractor {
         return STRONG_TITLE_TERMS.any(folded::contains) || GENERIC_TITLE_TERMS.any(folded::contains)
     }
 
-    private fun extractSpecificProvider(line: String): String {
-        val anchor = schoolProviderAnchor.find(line) ?: return line
-        val candidate = line.substring(anchor.range.first)
-        val stop = schoolProviderStop.find(candidate, anchor.value.length)?.range?.first ?: candidate.length
-        return candidate.substring(0, stop).trim()
+    private fun extractSpecificProvider(lines: List<String>, index: Int): String {
+        val clean = stripParallelProviderFields(lines[index])
+        if (clean.isBlank()) return ""
+        val folded = foldGreek(clean)
+
+        if (folded.contains("μοναδα υγειας")) {
+            val colon = clean.indexOf(':')
+            val base = if (colon >= 0) clean.substring(colon + 1).trim() else clean
+            return joinProviderContinuations(lines, index, base, 2)
+        }
+
+        val migrationStart = folded.indexOf("διευθυνση αλλοδαπων")
+        if (migrationStart >= 0) {
+            val base = clean.substring(migrationStart).trim()
+            return joinProviderContinuations(lines, index, base, 3)
+        }
+
+        schoolProviderAnchor.find(clean)?.let { anchor ->
+            val candidate = clean.substring(anchor.range.first)
+            val stop = schoolProviderStop.find(candidate, anchor.value.length)?.range?.first ?: candidate.length
+            return candidate.substring(0, stop).replace(Regex("""\s+"""), " ").trim()
+        }
+
+        if (folded.contains("ληξιαρχειο")) return clean
+
+        if (PROVIDER_LEGAL_ENTITY_TERMS.any(folded::contains)) {
+            val parts = mutableListOf<String>()
+            if (index > 0) {
+                val previous = stripParallelProviderFields(lines[index - 1])
+                if (isUppercaseProviderContinuation(previous) &&
+                    PROVIDER_HEADER_NOISE.none(foldGreek(previous)::contains)
+                ) {
+                    parts += previous
+                }
+            }
+            parts += clean
+            return parts.joinToString(" ").replace(Regex("""\s+"""), " ").trim()
+        }
+
+        extractBankBrand(clean)?.let { return it }
+        return clean
+    }
+
+    private fun joinProviderContinuations(lines: List<String>, index: Int, base: String, maxNextLines: Int): String {
+        val parts = mutableListOf<String>()
+        if (base.isNotBlank()) parts += base
+        var consumed = 0
+        var cursor = index + 1
+        while (cursor < lines.size && consumed < maxNextLines) {
+            val candidate = stripParallelProviderFields(lines[cursor])
+            if (!isUppercaseProviderContinuation(candidate)) break
+            parts += candidate
+            consumed += 1
+            cursor += 1
+        }
+        return parts.joinToString(" ").replace(Regex("""\s+"""), " ").trim()
+    }
+
+    private fun stripParallelProviderFields(line: String): String {
+        val folded = foldGreek(line)
+        val cutAt = providerParallelFieldRegex.find(folded)?.range?.first ?: line.length
+        return line.take(cutAt)
+            .replace(Regex("""\s+"""), " ")
+            .trim(' ', '-', '|', '·')
+    }
+
+    private fun isUppercaseProviderContinuation(line: String): Boolean {
+        if (line.isBlank() || line.length > 90 || line.contains(':')) return false
+        val folded = foldGreek(line)
+        if (PROVIDER_HEADER_NOISE.any(folded::contains)) return false
+        val letters = line.filter(Char::isLetter)
+        if (letters.isEmpty()) return false
+        val uppercase = letters.count(Char::isUpperCase)
+        return uppercase.toDouble() / letters.length >= 0.75
+    }
+
+    private fun extractBankBrand(line: String): String? {
+        bankPairRegex.find(line)?.let { match ->
+            val first = match.groupValues.getOrNull(1).orEmpty()
+            if (first.isNotBlank()) return "$first Bank"
+        }
+        return compoundBankRegex.findAll(line)
+            .map { it.value.removePrefix("www.").removePrefix("WWW.") }
+            .firstOrNull { value -> foldGreek(value) !in setOf("bank", "banking", "ebanking", "e-banking") }
     }
 
     private fun titleScore(line: String, index: Int): Int? {
@@ -323,14 +413,21 @@ object MetadataExtractor {
 
     private fun providerScore(line: String): Int? {
         val value = foldGreek(line)
+        if (value.isBlank()) return null
+        if (PROVIDER_NON_ISSUER_TERMS.any(value::contains)) return null
         if (value.contains("ελληνικη δημοκρατια") || value == "δημοκρατια") return 1
-        var score = 0
-        if (listOf("γυμνασιο", "λυκειο", "σχολειο", "πανεπιστημιο", "university", "school").any(value::contains)) score += 7
-        if (listOf("υπουργειο", "ministry").any(value::contains)) score += 5
-        if (listOf("διευθυνση", "υπηρεσια", "γενικη γραμματεια", "directorate").any(value::contains)) score += 4
-        if (listOf("δημος", "ααδε", "εφκα", "οργανισμος", "νοσοκομειο").any(value::contains)) score += 3
-        if (listOf("gov.gr", "δεη", "τραπεζ").any(value::contains)) score += 2
-        return score.takeIf { it > 0 }
+        if (value.contains("διευθυνση αλλοδαπων") && (value.contains("μεταναστε") || value.contains("migration"))) return 12
+        if (value.contains("ληξιαρχειο")) return 11
+        if (value.contains("μοναδα ψυχικης υγειας") || value.contains("νοσηλευτικη") || value.contains("νοσηλευτικ")) return 10
+        if (PROVIDER_LEGAL_ENTITY_TERMS.any(value::contains)) return 10
+        if (schoolProviderAnchor.containsMatchIn(line)) return 9
+        if (extractBankBrand(line) != null || value.startsWith("τραπεζα ")) return 8
+        if (listOf("υπουργειο", "ministry").any(value::contains)) return 6
+        if (listOf("διευθυνση", "υπηρεσια", "γενικη γραμματεια", "directorate").any(value::contains)) return 5
+        if (listOf("δημος", "ααδε", "εφκα", "οργανισμος", "νοσοκομειο").any(value::contains)) return 4
+        if (listOf("gov.gr", "δεη").any(value::contains)) return 3
+        if (listOf("γυμνασι", "λυκει", "σχολει").any(value::contains)) return 2
+        return null
     }
 
     private fun keywordScore(context: String, strongKeywords: List<String>, regularKeywords: List<String>): Int {
@@ -450,6 +547,30 @@ object MetadataExtractor {
         "αρ. αδειας", "αρ αδειας", "αριθμος αδειας", "κωδικος εγγραφου", "κωδικος ηλεκτρονικης πληρωμης",
         "στοιχεια πελατη", "στοιχεια παραστατικου", "στοιχεια πολιτη", "στοιχεια ιατρου", "iban", "δικαιουχοι"
     )
+    private val PROVIDER_LEGAL_ENTITY_TERMS = listOf(
+        "ανωνυμη εταιρεια",
+        "μονοπροσωπη ανωνυμη",
+        "μονοπροσωπη αε"
+    )
+    private val PROVIDER_NON_ISSUER_TERMS = listOf(
+        "διευθυνση κατοικιας",
+        "ηλεκτρονικη σας διευθυνση",
+        "ταχυδρομικη διευθυνση",
+        "διευθυνση email"
+    )
+    private val PROVIDER_HEADER_NOISE = listOf(
+        "αρ. αδειας",
+        "αρ αδειας",
+        "αρ.πρωτ",
+        "αρ πρωτ",
+        "αρ. φακελου",
+        "αρ φακελου",
+        "στοιχεια",
+        "ημερομηνια",
+        "κωδικος",
+        "τηλ.",
+        "ταχ.δ/νση"
+    )
 
     private const val STRONG_TITLE_SCORE = 10
     private const val MIN_TITLE_SCORE = 6
@@ -457,5 +578,6 @@ object MetadataExtractor {
     private const val REGULAR_KEYWORD_SCORE = 4
     private const val DATELINE_SCORE = 3
     private const val LABEL_CONTEXT_LIMIT = 120
+    private const val MAX_PROVIDER_LENGTH = 180
     private const val MAX_METADATA_EVIDENCE_CHARS = 16_000
 }
