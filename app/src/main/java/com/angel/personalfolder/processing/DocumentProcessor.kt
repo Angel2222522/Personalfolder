@@ -74,6 +74,11 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                     fullTextBuilder.append(text.take((LibraryLimits.MAX_DOCUMENT_OCR_CHARS - fullTextBuilder.length).coerceAtLeast(0)))
                 }
                 DataOperationCoordinator.withExclusive {
+                    LibraryLimits.requireTotalOcrChars(
+                        database.documentDao().totalDocumentOcrChars() +
+                            database.documentPageDao().totalOcrChars() +
+                            text.length
+                    )
                     database.documentPageDao().updateOcr(document.id, source.pageIndex, text)
                 }
             }
@@ -89,7 +94,8 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                     return@withExclusive null to Result.failure(IllegalStateException(message))
                 }
                 LibraryLimits.requireTotalOcrChars(
-                    database.documentDao().totalDocumentOcrChars() - latest.ocrText.length + fullText.length
+                    database.documentDao().totalDocumentOcrChars() - latest.ocrText.length + fullText.length +
+                        database.documentPageDao().totalOcrChars()
                 )
                 LibraryLimits.requireTotalMetadataJsonChars(
                     database.documentDao().totalMetadataJsonChars() - latest.extractedMetadataJson.length + metadata.json.length

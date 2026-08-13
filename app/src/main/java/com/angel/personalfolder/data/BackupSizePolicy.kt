@@ -55,5 +55,67 @@ object BackupSizePolicy {
         require(pages.all { it.documentId in documentIds }) {
             "Το αντίγραφο περιέχει σελίδα άγνωστου εγγράφου."
         }
+        pages.forEach { page ->
+            require(page.ocrText.length <= LibraryLimits.MAX_DOCUMENT_OCR_CHARS) {
+                "Το OCR μιας πηγής είναι υπερβολικά μεγάλο."
+            }
+        }
+    }
+
+    fun requireTextShapes(
+        documents: List<DocumentEntity>,
+        pages: List<DocumentPageEntity>,
+        cases: List<CaseEntity>,
+        events: List<TimelineEventEntity>,
+        checklist: List<ChecklistItemEntity>,
+        reminders: List<ReminderEntity>
+    ) {
+        documents.forEach { document ->
+            LibraryLimits.requireText(document.title, LibraryLimits.MAX_DOCUMENT_TITLE_CHARS, "Ο τίτλος εγγράφου είναι υπερβολικά μεγάλος.")
+            LibraryLimits.requireText(document.originalFileName, LibraryLimits.MAX_DOCUMENT_FILE_NAME_CHARS, "Το όνομα αρχείου είναι υπερβολικά μεγάλο.")
+            LibraryLimits.requireText(document.mimeType, LibraryLimits.MAX_MIME_TYPE_CHARS, "Ο τύπος αρχείου είναι υπερβολικά μεγάλος.")
+            LibraryLimits.requireText(document.category, LibraryLimits.MAX_DOCUMENT_CATEGORY_CHARS, "Η κατηγορία είναι υπερβολικά μεγάλη.")
+            LibraryLimits.requireText(document.tags, LibraryLimits.MAX_DOCUMENT_TAGS_CHARS, "Οι ετικέτες είναι υπερβολικά μεγάλες.")
+            LibraryLimits.requireText(document.provider, LibraryLimits.MAX_DOCUMENT_PROVIDER_CHARS, "Ο φορέας είναι υπερβολικά μεγάλος.")
+            LibraryLimits.requireText(document.issuedDate, LibraryLimits.MAX_DATE_CHARS, "Η ημερομηνία έκδοσης είναι υπερβολικά μεγάλη.")
+            LibraryLimits.requireText(document.expiryDate, LibraryLimits.MAX_DATE_CHARS, "Η ημερομηνία λήξης είναι υπερβολικά μεγάλη.")
+            LibraryLimits.requireText(document.protocolNumber, LibraryLimits.MAX_PROTOCOL_NUMBER_CHARS, "Ο αριθμός πρωτοκόλλου είναι υπερβολικά μεγάλος.")
+            LibraryLimits.requireText(document.processingError, LibraryLimits.MAX_PROCESSING_ERROR_CHARS, "Το σφάλμα επεξεργασίας είναι υπερβολικά μεγάλο.")
+            LibraryLimits.requireText(document.expiryDateSuggestion, LibraryLimits.MAX_DATE_CHARS, "Η προτεινόμενη ημερομηνία είναι υπερβολικά μεγάλη.")
+            listOf(
+                document.expiryDateSuggestionConfidence,
+                document.titleConfidence,
+                document.categoryConfidence,
+                document.providerConfidence,
+                document.issuedDateConfidence,
+                document.expiryDateConfidence,
+                document.protocolNumberConfidence
+            ).forEach { LibraryLimits.requireText(it, LibraryLimits.MAX_CONFIDENCE_CHARS, "Η ένδειξη βεβαιότητας είναι υπερβολικά μεγάλη.") }
+        }
+        pages.forEach { page ->
+            LibraryLimits.requireText(page.sourceFileName, LibraryLimits.MAX_DOCUMENT_FILE_NAME_CHARS, "Το όνομα πηγής είναι υπερβολικά μεγάλο.")
+            LibraryLimits.requireText(page.mimeType, LibraryLimits.MAX_MIME_TYPE_CHARS, "Ο τύπος πηγής είναι υπερβολικά μεγάλος.")
+        }
+        cases.forEach { item ->
+            LibraryLimits.requireText(item.title, LibraryLimits.MAX_CASE_TITLE_CHARS, "Ο τίτλος υπόθεσης είναι υπερβολικά μεγάλος.")
+            LibraryLimits.requireText(item.description, LibraryLimits.MAX_CASE_DESCRIPTION_CHARS, "Η περιγραφή υπόθεσης είναι υπερβολικά μεγάλη.")
+            LibraryLimits.requireText(item.status, LibraryLimits.MAX_CASE_STATUS_CHARS, "Η κατάσταση υπόθεσης είναι υπερβολικά μεγάλη.")
+            LibraryLimits.requireText(item.startDate, LibraryLimits.MAX_DATE_CHARS, "Η ημερομηνία έναρξης είναι υπερβολικά μεγάλη.")
+            LibraryLimits.requireText(item.deadline, LibraryLimits.MAX_DATE_CHARS, "Η προθεσμία υπόθεσης είναι υπερβολικά μεγάλη.")
+            LibraryLimits.requireText(item.nextStep, LibraryLimits.MAX_CASE_NEXT_STEP_CHARS, "Το επόμενο βήμα είναι υπερβολικά μεγάλο.")
+            LibraryLimits.requireText(item.notes, LibraryLimits.MAX_CASE_NOTES_CHARS, "Οι σημειώσεις υπόθεσης είναι υπερβολικά μεγάλες.")
+        }
+        events.forEach { item ->
+            LibraryLimits.requireText(item.title, LibraryLimits.MAX_EVENT_TITLE_CHARS, "Ο τίτλος γεγονότος είναι υπερβολικά μεγάλος.")
+            LibraryLimits.requireText(item.note, LibraryLimits.MAX_EVENT_NOTE_CHARS, "Η σημείωση γεγονότος είναι υπερβολικά μεγάλη.")
+            LibraryLimits.requireText(item.eventType, LibraryLimits.MAX_EVENT_TYPE_CHARS, "Ο τύπος γεγονότος είναι υπερβολικά μεγάλος.")
+            LibraryLimits.requireText(item.eventDate, LibraryLimits.MAX_DATE_CHARS, "Η ημερομηνία γεγονότος είναι υπερβολικά μεγάλη.")
+        }
+        checklist.forEach { item ->
+            LibraryLimits.requireText(item.title, LibraryLimits.MAX_CHECKLIST_TITLE_CHARS, "Ο τίτλος checklist είναι υπερβολικά μεγάλος.")
+        }
+        reminders.forEach { item ->
+            LibraryLimits.requireText(item.title, LibraryLimits.MAX_REMINDER_TITLE_CHARS, "Ο τίτλος υπενθύμισης είναι υπερβολικά μεγάλος.")
+        }
     }
 }

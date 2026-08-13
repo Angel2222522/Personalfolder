@@ -158,6 +158,11 @@ class FolderRepository(private val context: Context) {
             val cleanExpiry = expiryDate.cleanDateOrNull("Η ημερομηνία λήξης δεν είναι έγκυρη.")
             val cleanIssued = issuedDate.cleanDateOrNull("Η ημερομηνία έκδοσης δεν είναι έγκυρη.")
             val cleanProtocol = protocolNumber?.trim()?.ifBlank { null }
+            LibraryLimits.requireText(cleanTitle, LibraryLimits.MAX_DOCUMENT_TITLE_CHARS, "Ο τίτλος εγγράφου είναι υπερβολικά μεγάλος.")
+            LibraryLimits.requireText(cleanCategory, LibraryLimits.MAX_DOCUMENT_CATEGORY_CHARS, "Η κατηγορία είναι υπερβολικά μεγάλη.")
+            LibraryLimits.requireText(cleanTags, LibraryLimits.MAX_DOCUMENT_TAGS_CHARS, "Οι ετικέτες είναι υπερβολικά μεγάλες.")
+            LibraryLimits.requireText(cleanProvider, LibraryLimits.MAX_DOCUMENT_PROVIDER_CHARS, "Ο φορέας είναι υπερβολικά μεγάλος.")
+            LibraryLimits.requireText(cleanProtocol, LibraryLimits.MAX_PROTOCOL_NUMBER_CHARS, "Ο αριθμός πρωτοκόλλου είναι υπερβολικά μεγάλος.")
             val current = database.documentDao().getById(id) ?: error("Το έγγραφο δεν βρέθηκε.")
             val titleChanged = current.title != cleanTitle
             val categoryChanged = current.category != cleanCategory
@@ -302,6 +307,10 @@ class FolderRepository(private val context: Context) {
             val cleanTitle = title.trim().ifBlank { error("Η υπόθεση χρειάζεται τίτλο.") }
             val cleanStart = startDate.cleanDateOrNull("Η ημερομηνία έναρξης δεν είναι έγκυρη.")
             val cleanDeadline = deadline.cleanDateOrNull("Η προθεσμία δεν είναι έγκυρη.")
+            LibraryLimits.requireText(cleanTitle, LibraryLimits.MAX_CASE_TITLE_CHARS, "Ο τίτλος υπόθεσης είναι υπερβολικά μεγάλος.")
+            LibraryLimits.requireText(description.trim(), LibraryLimits.MAX_CASE_DESCRIPTION_CHARS, "Η περιγραφή υπόθεσης είναι υπερβολικά μεγάλη.")
+            LibraryLimits.requireText(nextStep.trim(), LibraryLimits.MAX_CASE_NEXT_STEP_CHARS, "Το επόμενο βήμα είναι υπερβολικά μεγάλο.")
+            LibraryLimits.requireText(notes.trim(), LibraryLimits.MAX_CASE_NOTES_CHARS, "Οι σημειώσεις υπόθεσης είναι υπερβολικά μεγάλες.")
             val id = UUID.randomUUID().toString()
             val now = System.currentTimeMillis()
             require(database.caseDao().count() < LibraryLimits.MAX_CASES) { "Η βιβλιοθήκη έχει φτάσει το όριο υποθέσεων." }
@@ -341,6 +350,11 @@ class FolderRepository(private val context: Context) {
             val cleanTitle = title.trim().ifBlank { error("Η υπόθεση χρειάζεται τίτλο.") }
             val cleanStart = startDate.cleanDateOrNull("Η ημερομηνία έναρξης δεν είναι έγκυρη.")
             val cleanDeadline = deadline.cleanDateOrNull("Η προθεσμία δεν είναι έγκυρη.")
+            LibraryLimits.requireText(cleanTitle, LibraryLimits.MAX_CASE_TITLE_CHARS, "Ο τίτλος υπόθεσης είναι υπερβολικά μεγάλος.")
+            LibraryLimits.requireText(description.trim(), LibraryLimits.MAX_CASE_DESCRIPTION_CHARS, "Η περιγραφή υπόθεσης είναι υπερβολικά μεγάλη.")
+            LibraryLimits.requireText(status, LibraryLimits.MAX_CASE_STATUS_CHARS, "Η κατάσταση υπόθεσης είναι υπερβολικά μεγάλη.")
+            LibraryLimits.requireText(nextStep.trim(), LibraryLimits.MAX_CASE_NEXT_STEP_CHARS, "Το επόμενο βήμα είναι υπερβολικά μεγάλο.")
+            LibraryLimits.requireText(notes.trim(), LibraryLimits.MAX_CASE_NOTES_CHARS, "Οι σημειώσεις υπόθεσης είναι υπερβολικά μεγάλες.")
             database.caseDao().update(id, cleanTitle, description.trim(), status, cleanStart, cleanDeadline, nextStep.trim(), notes.trim(), System.currentTimeMillis())
             cleanTitle to cleanDeadline
         }
@@ -397,6 +411,8 @@ class FolderRepository(private val context: Context) {
         DataOperationCoordinator.requireUserSessionUnlocked()
         require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
         require(database.timelineDao().count() < LibraryLimits.MAX_TIMELINE_EVENTS) { "Η βιβλιοθήκη έχει φτάσει το όριο γεγονότων." }
+        LibraryLimits.requireText(title.trim(), LibraryLimits.MAX_EVENT_TITLE_CHARS, "Ο τίτλος γεγονότος είναι υπερβολικά μεγάλος.")
+        LibraryLimits.requireText(note.trim(), LibraryLimits.MAX_EVENT_NOTE_CHARS, "Η σημείωση γεγονότος είναι υπερβολικά μεγάλη.")
         database.timelineDao().insert(
             TimelineEventEntity(
                 id = UUID.randomUUID().toString(), caseId = caseId, title = title.trim(), note = note.trim(),
@@ -409,6 +425,7 @@ class FolderRepository(private val context: Context) {
         DataOperationCoordinator.requireUserSessionUnlocked()
         require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
         require(database.checklistDao().count() < LibraryLimits.MAX_CHECKLIST_ITEMS) { "Η βιβλιοθήκη έχει φτάσει το όριο λίστας." }
+        LibraryLimits.requireText(title.trim(), LibraryLimits.MAX_CHECKLIST_TITLE_CHARS, "Ο τίτλος checklist είναι υπερβολικά μεγάλος.")
         if (linkedDocumentId != null) require(database.documentDao().getById(linkedDocumentId) != null) { "Το έγγραφο δεν βρέθηκε." }
         database.checklistDao().insert(ChecklistItemEntity(UUID.randomUUID().toString(), caseId, title.trim(), linkedDocumentId = linkedDocumentId, createdAt = System.currentTimeMillis()))
     }

@@ -202,6 +202,7 @@ class BackupService(private val context: Context) {
             val checklist = database.checklistDao().getAll()
             val reminders = database.reminderDao().getAll()
             BackupSizePolicy.requireDocumentShapes(documents, pages)
+            BackupSizePolicy.requireTextShapes(documents, pages, cases, events, checklist, reminders)
             BackupSizePolicy.requireLibraryState(
                 documents = documents.size,
                 pages = pages.size,
@@ -313,6 +314,7 @@ class BackupService(private val context: Context) {
                     )
                 }
             }
+            BackupSizePolicy.requireTextShapes(documents, restoredPages, cases, events, checklist, reminders)
             val expectedDatabaseFingerprint = RestoreGenerationFingerprint.of(
                 documents,
                 restoredPages,
@@ -460,11 +462,11 @@ class BackupService(private val context: Context) {
             LibraryLimits.requireLogicalPagesPerDocument(pageCount)
             val legacyGlobalManual = item.optBoolean("metadataManuallyEdited", false)
             val expiryManuallyEdited = item.optBoolean("expiryDateManuallyEdited", legacyGlobalManual)
-            val rawExpiry = item.optNullableString("expiryDate")
+            val rawExpiry = item.optNullableString("expiryDate")?.requireLength(LibraryLimits.MAX_DATE_CHARS, "Η ημερομηνία λήξης είναι υπερβολικά μεγάλη.")
             val rawExpiryConfidence = item.optString(
                 "expiryDateConfidence",
                 if (expiryManuallyEdited) MetadataConfidence.MANUAL else MetadataConfidence.UNKNOWN
-            )
+            ).requireLength(LibraryLimits.MAX_CONFIDENCE_CHARS, "Η ένδειξη βεβαιότητας είναι υπερβολικά μεγάλη.")
             val confirmedExpiry = rawExpiry?.takeIf {
                 MetadataConfidence.isConfirmed(it, rawExpiryConfidence, expiryManuallyEdited)
             }
@@ -473,7 +475,7 @@ class BackupService(private val context: Context) {
             val expirySuggestionConfidence = item.optString(
                 "expiryDateSuggestionConfidence",
                 if (expirySuggestion != null) MetadataConfidence.LOW else MetadataConfidence.NONE
-            )
+            ).requireLength(LibraryLimits.MAX_CONFIDENCE_CHARS, "Η ένδειξη βεβαιότητας είναι υπερβολικά μεγάλη.")
             val titleManuallyEdited = item.optBoolean("titleManuallyEdited", legacyGlobalManual)
             val categoryManuallyEdited = item.optBoolean("categoryManuallyEdited", legacyGlobalManual)
             val providerManuallyEdited = item.optBoolean("providerManuallyEdited", legacyGlobalManual)
@@ -481,32 +483,32 @@ class BackupService(private val context: Context) {
             val protocolNumberManuallyEdited = item.optBoolean("protocolNumberManuallyEdited", legacyGlobalManual)
             result += DocumentEntity(
                 id = id,
-                title = item.getString("title").take(200),
-                originalFileName = item.getString("originalFileName").take(200),
-                mimeType = item.getString("mimeType").take(120),
+                title = item.getString("title").requireLength(LibraryLimits.MAX_DOCUMENT_TITLE_CHARS, "Ο τίτλος εγγράφου είναι υπερβολικά μεγάλος."),
+                originalFileName = item.getString("originalFileName").requireLength(LibraryLimits.MAX_DOCUMENT_FILE_NAME_CHARS, "Το όνομα αρχείου είναι υπερβολικά μεγάλο."),
+                mimeType = item.getString("mimeType").requireLength(LibraryLimits.MAX_MIME_TYPE_CHARS, "Ο τύπος αρχείου είναι υπερβολικά μεγάλος."),
                 encryptedPath = root.resolve("$id/page_${documentPages.minOf { it.pageIndex }}.pf").absolutePath,
                 pageCount = pageCount.coerceAtLeast(documentPages.size),
-                category = item.optString("category", "Άλλα").take(120),
-                tags = item.optString("tags").take(500),
-                provider = item.optString("provider").take(200),
-                issuedDate = item.optNullableString("issuedDate"),
+                category = item.optString("category", "Άλλα").requireLength(LibraryLimits.MAX_DOCUMENT_CATEGORY_CHARS, "Η κατηγορία είναι υπερβολικά μεγάλη."),
+                tags = item.optString("tags").requireLength(LibraryLimits.MAX_DOCUMENT_TAGS_CHARS, "Οι ετικέτες είναι υπερβολικά μεγάλες."),
+                provider = item.optString("provider").requireLength(LibraryLimits.MAX_DOCUMENT_PROVIDER_CHARS, "Ο φορέας είναι υπερβολικά μεγάλος."),
+                issuedDate = item.optNullableString("issuedDate")?.requireLength(LibraryLimits.MAX_DATE_CHARS, "Η ημερομηνία έκδοσης είναι υπερβολικά μεγάλη."),
                 expiryDate = confirmedExpiry,
-                protocolNumber = item.optNullableString("protocolNumber"),
+                protocolNumber = item.optNullableString("protocolNumber")?.requireLength(LibraryLimits.MAX_PROTOCOL_NUMBER_CHARS, "Ο αριθμός πρωτοκόλλου είναι υπερβολικά μεγάλος."),
                 ocrText = item.optString("ocrText").requireLength(MAX_OCR_TEXT, "Το OCR του εγγράφου είναι υπερβολικά μεγάλο."),
                 extractedMetadataJson = item.optString("extractedMetadataJson").requireLength(MAX_METADATA_JSON, "Τα μεταδεδομένα του εγγράφου είναι υπερβολικά μεγάλα."),
                 processingState = safeProcessingState(item.optString("processingState", ProcessingState.PROCESSED)),
-                processingError = item.optNullableString("processingError") ?: item.optString("processingState").let {
+                processingError = item.optNullableString("processingError")?.requireLength(LibraryLimits.MAX_PROCESSING_ERROR_CHARS, "Το σφάλμα επεξεργασίας είναι υπερβολικά μεγάλο.") ?: item.optString("processingState").let {
                     if (it == ProcessingState.QUEUED || it == ProcessingState.PROCESSING) "Η επεξεργασία δεν συνεχίστηκε μετά την επαναφορά. Επίλεξε επανάληψη OCR." else null
                 },
                 metadataManuallyEdited = legacyGlobalManual || titleManuallyEdited || categoryManuallyEdited || providerManuallyEdited || issuedDateManuallyEdited || expiryManuallyEdited || protocolNumberManuallyEdited,
-                expiryDateSuggestion = expirySuggestion,
-                expiryDateSuggestionConfidence = expirySuggestionConfidence,
-                titleConfidence = item.optString("titleConfidence", MetadataConfidence.UNKNOWN),
-                categoryConfidence = item.optString("categoryConfidence", MetadataConfidence.UNKNOWN),
-                providerConfidence = item.optString("providerConfidence", MetadataConfidence.UNKNOWN),
-                issuedDateConfidence = item.optString("issuedDateConfidence", MetadataConfidence.UNKNOWN),
-                expiryDateConfidence = if (confirmedExpiry == null) MetadataConfidence.UNKNOWN else rawExpiryConfidence,
-                protocolNumberConfidence = item.optString("protocolNumberConfidence", MetadataConfidence.UNKNOWN),
+                expiryDateSuggestion = expirySuggestion?.requireLength(LibraryLimits.MAX_DATE_CHARS, "Η προτεινόμενη ημερομηνία είναι υπερβολικά μεγάλη."),
+                expiryDateSuggestionConfidence = expirySuggestionConfidence.requireLength(LibraryLimits.MAX_CONFIDENCE_CHARS, "Η ένδειξη βεβαιότητας είναι υπερβολικά μεγάλη."),
+                titleConfidence = item.optString("titleConfidence", MetadataConfidence.UNKNOWN).requireLength(LibraryLimits.MAX_CONFIDENCE_CHARS, "Η ένδειξη βεβαιότητας είναι υπερβολικά μεγάλη."),
+                categoryConfidence = item.optString("categoryConfidence", MetadataConfidence.UNKNOWN).requireLength(LibraryLimits.MAX_CONFIDENCE_CHARS, "Η ένδειξη βεβαιότητας είναι υπερβολικά μεγάλη."),
+                providerConfidence = item.optString("providerConfidence", MetadataConfidence.UNKNOWN).requireLength(LibraryLimits.MAX_CONFIDENCE_CHARS, "Η ένδειξη βεβαιότητας είναι υπερβολικά μεγάλη."),
+                issuedDateConfidence = item.optString("issuedDateConfidence", MetadataConfidence.UNKNOWN).requireLength(LibraryLimits.MAX_CONFIDENCE_CHARS, "Η ένδειξη βεβαιότητας είναι υπερβολικά μεγάλη."),
+                expiryDateConfidence = (if (confirmedExpiry == null) MetadataConfidence.UNKNOWN else rawExpiryConfidence).requireLength(LibraryLimits.MAX_CONFIDENCE_CHARS, "Η ένδειξη βεβαιότητας είναι υπερβολικά μεγάλη."),
+                protocolNumberConfidence = item.optString("protocolNumberConfidence", MetadataConfidence.UNKNOWN).requireLength(LibraryLimits.MAX_CONFIDENCE_CHARS, "Η ένδειξη βεβαιότητας είναι υπερβολικά μεγάλη."),
                 titleManuallyEdited = titleManuallyEdited,
                 categoryManuallyEdited = categoryManuallyEdited,
                 providerManuallyEdited = providerManuallyEdited,
@@ -559,7 +561,14 @@ class BackupService(private val context: Context) {
             val pageIndex = x.getInt("pageIndex").also { require(it in 0..MAX_PAGE_INDEX) }
             val entryName = "files/$documentId/$pageIndex.pf"
             require(seen.add(entryName)) { "Το αντίγραφο περιέχει διπλή σελίδα." }
-            add(PageDescriptor(documentId, pageIndex, entryName, x.optString("ocrText").take(MAX_OCR_TEXT), x.optString("sourceFileName").take(200), x.optString("mimeType", "application/octet-stream").take(120)))
+            add(PageDescriptor(
+                documentId,
+                pageIndex,
+                entryName,
+                x.optString("ocrText").requireLength(MAX_OCR_TEXT, "Το OCR της πηγής είναι υπερβολικά μεγάλο."),
+                x.optString("sourceFileName").requireLength(LibraryLimits.MAX_DOCUMENT_FILE_NAME_CHARS, "Το όνομα πηγής είναι υπερβολικά μεγάλο."),
+                x.optString("mimeType", "application/octet-stream").requireLength(LibraryLimits.MAX_MIME_TYPE_CHARS, "Ο τύπος πηγής είναι υπερβολικά μεγάλος.")
+            ))
         }
     }
 
@@ -570,7 +579,18 @@ class BackupService(private val context: Context) {
             val x = array!!.getJSONObject(i)
             val id = requireSafeId(x.getString("id"))
             require(seen.add(id)) { "Το αντίγραφο περιέχει διπλή υπόθεση." }
-            add(CaseEntity(id, x.getString("title").take(200), x.optString("description").take(2000), x.optString("status", CaseStatus.NEW).take(80), x.optNullableString("startDate"), x.optNullableString("deadline"), x.optString("nextStep").take(500), x.optString("notes").take(5000), x.optLong("createdAt", System.currentTimeMillis()), x.optLong("updatedAt", System.currentTimeMillis())))
+            add(CaseEntity(
+                id,
+                x.getString("title").requireLength(LibraryLimits.MAX_CASE_TITLE_CHARS, "Ο τίτλος υπόθεσης είναι υπερβολικά μεγάλος."),
+                x.optString("description").requireLength(LibraryLimits.MAX_CASE_DESCRIPTION_CHARS, "Η περιγραφή υπόθεσης είναι υπερβολικά μεγάλη."),
+                x.optString("status", CaseStatus.NEW).requireLength(LibraryLimits.MAX_CASE_STATUS_CHARS, "Η κατάσταση υπόθεσης είναι υπερβολικά μεγάλη."),
+                x.optNullableString("startDate")?.requireLength(LibraryLimits.MAX_DATE_CHARS, "Η ημερομηνία έναρξης είναι υπερβολικά μεγάλη."),
+                x.optNullableString("deadline")?.requireLength(LibraryLimits.MAX_DATE_CHARS, "Η προθεσμία υπόθεσης είναι υπερβολικά μεγάλη."),
+                x.optString("nextStep").requireLength(LibraryLimits.MAX_CASE_NEXT_STEP_CHARS, "Το επόμενο βήμα είναι υπερβολικά μεγάλο."),
+                x.optString("notes").requireLength(LibraryLimits.MAX_CASE_NOTES_CHARS, "Οι σημειώσεις υπόθεσης είναι υπερβολικά μεγάλες."),
+                x.optLong("createdAt", System.currentTimeMillis()),
+                x.optLong("updatedAt", System.currentTimeMillis())
+            ))
         }
     }
 
@@ -592,7 +612,15 @@ class BackupService(private val context: Context) {
             val x = array!!.getJSONObject(i); val caseId = requireSafeId(x.getString("caseId"))
             require(caseId in cases) { "Το αντίγραφο περιέχει γεγονός άγνωστης υπόθεσης." }
             val id = requireSafeId(x.getString("id")); require(seen.add(id)) { "Το αντίγραφο περιέχει διπλό γεγονός." }
-            add(TimelineEventEntity(id, caseId, x.getString("title").take(300), x.optString("note").take(5000), x.optString("eventType", "manual").take(50), x.getString("eventDate"), x.optLong("createdAt", System.currentTimeMillis())))
+            add(TimelineEventEntity(
+                id,
+                caseId,
+                x.getString("title").requireLength(LibraryLimits.MAX_EVENT_TITLE_CHARS, "Ο τίτλος γεγονότος είναι υπερβολικά μεγάλος."),
+                x.optString("note").requireLength(LibraryLimits.MAX_EVENT_NOTE_CHARS, "Η σημείωση γεγονότος είναι υπερβολικά μεγάλη."),
+                x.optString("eventType", "manual").requireLength(LibraryLimits.MAX_EVENT_TYPE_CHARS, "Ο τύπος γεγονότος είναι υπερβολικά μεγάλος."),
+                x.getString("eventDate").requireLength(LibraryLimits.MAX_DATE_CHARS, "Η ημερομηνία γεγονότος είναι υπερβολικά μεγάλη."),
+                x.optLong("createdAt", System.currentTimeMillis())
+            ))
         }
     }
 
@@ -603,7 +631,7 @@ class BackupService(private val context: Context) {
             val x = array!!.getJSONObject(i); val caseId = requireSafeId(x.getString("caseId")); val linked = x.optNullableString("linkedDocumentId")?.let(::requireSafeId)
             require(caseId in cases && (linked == null || linked in documents)) { "Το αντίγραφο περιέχει άκυρο δικαιολογητικό." }
             val id = requireSafeId(x.getString("id")); require(seen.add(id)) { "Το αντίγραφο περιέχει διπλό δικαιολογητικό." }
-            add(ChecklistItemEntity(id, caseId, x.getString("title").take(500), x.optBoolean("isComplete"), linked, x.optLong("createdAt", System.currentTimeMillis())))
+            add(ChecklistItemEntity(id, caseId, x.getString("title").requireLength(LibraryLimits.MAX_CHECKLIST_TITLE_CHARS, "Ο τίτλος checklist είναι υπερβολικά μεγάλος."), x.optBoolean("isComplete"), linked, x.optLong("createdAt", System.currentTimeMillis())))
         }
     }
 
@@ -621,14 +649,15 @@ class BackupService(private val context: Context) {
             val id = requireSafeId(x.getString("id")); require(seen.add(id)) { "Το αντίγραφο περιέχει διπλή υπενθύμιση." }
             val dueAt = x.getLong("dueAt")
             require(dueAt != Long.MIN_VALUE) { "Η υπενθύμιση έχει μη έγκυρη ημερομηνία." }
-            val leadDays = x.optInt("leadDays").coerceIn(0, 3650)
+            val leadDays = x.optInt("leadDays")
+            require(leadDays in 0..3650) { "Η υπενθύμιση έχει μη έγκυρο αριθμό ημερών." }
             val deadlineAt = x.optLong("deadlineAt", dueAt.saturatingAdd(leadDays.toLong() * 86_400_000L))
             require(deadlineAt != Long.MIN_VALUE && deadlineAt >= dueAt) { "Η υπενθύμιση έχει μη έγκυρη προθεσμία." }
             // Validate the complete legacy/current row first. Only then
             // discard a document reminder whose expiry is still a suggestion;
             // malformed backup data must never be hidden by that policy.
             if (documentId != null && documentId !in confirmedExpiryDocuments) continue
-            add(ReminderEntity(id, x.getString("title").take(500), dueAt, documentId, caseId, leadDays, x.optBoolean("isDone"), deadlineAt))
+            add(ReminderEntity(id, x.getString("title").requireLength(LibraryLimits.MAX_REMINDER_TITLE_CHARS, "Ο τίτλος υπενθύμισης είναι υπερβολικά μεγάλος."), dueAt, documentId, caseId, leadDays, x.optBoolean("isDone"), deadlineAt))
         }
     }
 

@@ -25,6 +25,29 @@ object LibraryLimits {
     const val MAX_METADATA_JSON_CHARS = 200_000
     const val MAX_TOTAL_METADATA_JSON_CHARS = 4_000_000
 
+    // These limits are shared by live edits and the backup parser. A backup
+    // must never shorten a value that the application itself can persist.
+    const val MAX_DOCUMENT_TITLE_CHARS = 200
+    const val MAX_DOCUMENT_FILE_NAME_CHARS = 200
+    const val MAX_MIME_TYPE_CHARS = 120
+    const val MAX_DOCUMENT_CATEGORY_CHARS = 120
+    const val MAX_DOCUMENT_TAGS_CHARS = 500
+    const val MAX_DOCUMENT_PROVIDER_CHARS = 200
+    const val MAX_PROTOCOL_NUMBER_CHARS = 200
+    const val MAX_PROCESSING_ERROR_CHARS = 300
+    const val MAX_CONFIDENCE_CHARS = 20
+    const val MAX_CASE_TITLE_CHARS = 200
+    const val MAX_CASE_DESCRIPTION_CHARS = 2_000
+    const val MAX_CASE_STATUS_CHARS = 80
+    const val MAX_CASE_NEXT_STEP_CHARS = 500
+    const val MAX_CASE_NOTES_CHARS = 5_000
+    const val MAX_EVENT_TITLE_CHARS = 300
+    const val MAX_EVENT_NOTE_CHARS = 5_000
+    const val MAX_EVENT_TYPE_CHARS = 50
+    const val MAX_DATE_CHARS = 10
+    const val MAX_CHECKLIST_TITLE_CHARS = 500
+    const val MAX_REMINDER_TITLE_CHARS = 500
+
     /** The manifest is bounded before it is parsed into an in-memory JSON tree. */
     const val MAX_BACKUP_MANIFEST_BYTES = 64L * 1024 * 1024
     const val MAX_BACKUP_ENTRY_COUNT = 100_000
@@ -75,5 +98,11 @@ object LibraryLimits {
         require(count in 0L..MAX_TOTAL_METADATA_JSON_CHARS.toLong()) {
             "Τα συνολικά μεταδεδομένα είναι υπερβολικά μεγάλα."
         }
+    }
+
+    fun requireText(value: String?, max: Int, message: String): String {
+        val checked = value.orEmpty()
+        require(checked.length <= max) { message }
+        return checked
     }
 }

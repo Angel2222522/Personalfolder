@@ -65,4 +65,56 @@ class BackupSizePolicyTest {
             )
         }
     }
+
+    @Test
+    fun rejectsOversizedSourceTextInsteadOfSilentlyShorteningIt() {
+        val document = DocumentEntity(
+            id = "doc-1",
+            title = "Έγγραφο",
+            originalFileName = "source.png",
+            mimeType = "image/png",
+            encryptedPath = "/private/doc-1/page_0.pf",
+            pageCount = 1,
+            createdAt = 1L,
+            updatedAt = 1L
+        )
+        val page = DocumentPageEntity(
+            documentId = document.id,
+            pageIndex = 0,
+            encryptedPath = document.encryptedPath,
+            ocrText = "x".repeat(LibraryLimits.MAX_DOCUMENT_OCR_CHARS + 1),
+            sourceFileName = "source.png",
+            mimeType = "image/png"
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            BackupSizePolicy.requireDocumentShapes(listOf(document), listOf(page))
+        }
+    }
+
+    @Test
+    fun rejectsTextThatWouldBeTruncatedDuringRestore() {
+        val oversizedTitle = "x".repeat(LibraryLimits.MAX_DOCUMENT_TITLE_CHARS + 1)
+        val document = DocumentEntity(
+            id = "doc-1",
+            title = oversizedTitle,
+            originalFileName = "source.png",
+            mimeType = "image/png",
+            encryptedPath = "/private/doc-1/page_0.pf",
+            pageCount = 1,
+            createdAt = 1L,
+            updatedAt = 1L
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            BackupSizePolicy.requireTextShapes(
+                documents = listOf(document),
+                pages = emptyList(),
+                cases = emptyList(),
+                events = emptyList(),
+                checklist = emptyList(),
+                reminders = emptyList()
+            )
+        }
+    }
 }
