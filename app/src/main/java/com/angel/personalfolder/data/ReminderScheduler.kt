@@ -45,8 +45,13 @@ object ReminderScheduler {
     }
 
     suspend fun replaceForCase(context: Context, caseId: String, title: String, deadline: String?) {
-        val date = deadline?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
         val database = AppDatabase.get(context)
+        val caseEntity = withDatabaseCommit(database) { caseDao().getById(caseId) }
+        val date = if (caseEntity != null && CaseReminderPolicy.shouldSchedule(caseEntity.status)) {
+            deadline?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+        } else {
+            null
+        }
         val replacements = date?.let { validDate -> leadDays.map { lead ->
             ReminderEntity(
                 id = UUID.randomUUID().toString(),
@@ -73,6 +78,16 @@ object ReminderScheduler {
         replacements.forEach { runCatching { scheduleWork(context, it) } }
     }
 
+    suspend fun reconcileForCase(context: Context, caseId: String) {
+        val database = AppDatabase.get(context)
+        val caseEntity = withDatabaseCommit(database) { caseDao().getById(caseId) }
+        if (caseEntity == null) {
+            removeForCase(context, caseId)
+            return
+        }
+        replaceForCase(context, caseId, caseEntity.title, caseEntity.deadline)
+    }
+
     suspend fun removeForDocument(context: Context, documentId: String) {
         val database = AppDatabase.get(context)
         val old = withDatabaseCommit(database) {
@@ -97,6 +112,12 @@ object ReminderScheduler {
 
     suspend fun rescheduleAll(context: Context) {
         val database = AppDatabase.get(context)
+        val inactiveCaseIds = withDatabaseCommit(database) {
+            caseDao().getAll()
+                .filterNot { CaseReminderPolicy.shouldSchedule(it.status) }
+                .map { it.id }
+        }
+        inactiveCaseIds.forEach { caseId -> removeForCase(context, caseId) }
         val reminders = withDatabaseCommit(database) {
             reminderDao().getAll().filterNot { it.isDone }
         }
