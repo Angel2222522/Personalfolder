@@ -38,7 +38,7 @@ object MetadataExtractor {
         // those two positions avoids treating narrative legal citations as the
         // document's own protocol number. Mixed Greek/Latin initial letters are
         // accepted because OCR commonly confuses visually identical glyphs.
-        """(?:^|[ \t]{2,})(?:(?:[ΑAαa]ριθ(?:μ(?:ός|ος)?)?\.?|[ΑAαa]ρ\.?)[ \t]*(?:[ΠPπp]ρωτ(?:οκ(?:ό|ο)λλου)?\.?)[ \t]*[:#№-]?[ \t]*([\p{L}\d][\p{L}\d./_\-]{1,79})|protocol(?:[ \t]+(?:no|number)\.?)?[ \t]*[:#№-]?[ \t]*([\p{L}\d][\p{L}\d./_\-]{1,79}))""",
+        """(?:^|[ \t]{2,})(?:(?:[ΑAαa]ριθ(?:μ(?:ός|ος)?)?\.?|[ΑAαa]ρ\.?)[ \t]*(?:[ΠPπp]ρωτ(?:οκ(?:ό|ο)λλου)?\.?)[ \t]*[:#№-]?[ \t]*([\p{L}\d](?:[\p{L}\d]|[ \t]*[./_\-][ \t]*[\p{L}\d]){1,79})|protocol(?:[ \t]+(?:no|number)\.?)?[ \t]*[:#№-]?[ \t]*([\p{L}\d](?:[\p{L}\d]|[ \t]*[./_\-][ \t]*[\p{L}\d]){1,79}))""",
         setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)
     )
     private val datelineContextRegex = Regex("""^[\p{L}\p{M} .΄'’\-]{2,50}[:,]\s*$""")
