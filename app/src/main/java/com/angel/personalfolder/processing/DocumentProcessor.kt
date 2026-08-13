@@ -36,6 +36,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
             } else pageRows
             val ocr = TesseractOcrEngine(context)
             val fullTextBuilder = StringBuilder()
+            val metadataAssistBuilder = StringBuilder()
             for (source in sources) {
                 val encrypted = File(source.encryptedPath)
                 require(FileCrypto.isPrivateDocumentFile(context, encrypted)) { "Η σελίδα βρίσκεται εκτός του ιδιωτικού χώρου." }
@@ -47,22 +48,36 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                 FileCrypto.decryptToTemp(encrypted, plain)
                 val mime = source.mimeType.ifBlank { document.mimeType }
                 val remainingCharacters = (MAX_DOCUMENT_OCR_CHARS - fullTextBuilder.length).coerceAtLeast(0)
-                val text = if (remainingCharacters == 0) {
-                    ""
+                val recognized = if (remainingCharacters == 0) {
+                    RecognizedContent("", "")
                 } else if (isPdf(mime, source.sourceFileName, document)) {
                     recognizePdf(plain, ocr, remainingCharacters)
                 } else {
                     val bitmap = decodeForOcr(plain)
-                    try { ocr.recognize(bitmap).take(remainingCharacters) } finally { bitmap.recycle() }
+                    try {
+                        val result = ocr.recognizeDetailed(
+                            bitmap,
+                            includeMetadataAssist = source.pageIndex < MAX_METADATA_ASSIST_PAGES
+                        )
+                        RecognizedContent(result.text.take(remainingCharacters), result.metadataAssistText)
+                    } finally {
+                        bitmap.recycle()
+                    }
                 }
+                val text = recognized.text
                 if (text.isNotBlank()) {
                     if (fullTextBuilder.isNotEmpty()) fullTextBuilder.append("\n\n")
                     fullTextBuilder.append(text.take((MAX_DOCUMENT_OCR_CHARS - fullTextBuilder.length).coerceAtLeast(0)))
                 }
+                appendMetadataAssist(metadataAssistBuilder, recognized.metadataAssistText)
                 database.documentPageDao().updateOcr(document.id, source.pageIndex, text)
             }
             val fullText = fullTextBuilder.toString().trim()
-            val metadata = MetadataExtractor.extract(fullText, document.title)
+            val metadata = MetadataExtractor.extract(
+                fullText,
+                document.title,
+                metadataAssistBuilder.toString()
+            )
             // Read the latest row before applying OCR suggestions. A user may have edited
             // metadata while OCR was running; never overwrite that newer manual choice.
             val latest = database.documentDao().getById(document.id) ?: document
@@ -99,43 +114,60 @@ class DocumentProcessor(private val context: Context, private val database: AppD
         }
     } }
 
-    private suspend fun recognizePdf(file: File, ocr: TesseractOcrEngine, maxCharacters: Int): String {
-        if (maxCharacters <= 0) return ""
+    private suspend fun recognizePdf(file: File, ocr: TesseractOcrEngine, maxCharacters: Int): RecognizedContent {
+        if (maxCharacters <= 0) return RecognizedContent("", "")
         ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
             PdfRenderer(descriptor).use { renderer ->
                 require(renderer.pageCount <= MAX_LOGICAL_PAGES) { "Το έγγραφο περιέχει υπερβολικά πολλές σελίδες." }
-                return buildString {
-                    for (index in 0 until renderer.pageCount) {
-                        if (length >= maxCharacters) break
-                        renderer.openPage(index).use { page ->
-                            val nativeText = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-                                OcrTextPostProcessor.normalizeNativePdfText(
-                                    page.textContents.joinToString("\n") { content -> content.text }
+                val visible = StringBuilder()
+                val metadataAssist = StringBuilder()
+                for (index in 0 until renderer.pageCount) {
+                    if (visible.length >= maxCharacters) break
+                    renderer.openPage(index).use { page ->
+                        val nativeText = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                            OcrTextPostProcessor.normalizeNativePdfText(
+                                page.textContents.joinToString("\n") { content -> content.text }
+                            )
+                        } else {
+                            ""
+                        }
+
+                        val pageResult = if (OcrTextPostProcessor.isUsableNativePdfText(nativeText)) {
+                            OcrRecognition(nativeText)
+                        } else {
+                            val bitmap = PdfBitmapRenderer.renderForOcr(page, OCR_MAX_SIDE)
+                            try {
+                                ocr.recognizeDetailed(
+                                    bitmap,
+                                    includeMetadataAssist = index < MAX_METADATA_ASSIST_PAGES
                                 )
-                            } else {
-                                ""
-                            }
-
-                            val pageText = if (OcrTextPostProcessor.isUsableNativePdfText(nativeText)) {
-                                nativeText
-                            } else {
-                                val bitmap = PdfBitmapRenderer.renderForOcr(page, OCR_MAX_SIDE)
-                                try {
-                                    ocr.recognize(bitmap)
-                                } finally {
-                                    bitmap.recycle()
-                                }
-                            }
-
-                            if (pageText.isNotBlank()) {
-                                if (isNotEmpty()) append("\n\n")
-                                append(pageText.take((maxCharacters - length).coerceAtLeast(0)))
+                            } finally {
+                                bitmap.recycle()
                             }
                         }
+
+                        if (pageResult.text.isNotBlank()) {
+                            if (visible.isNotEmpty()) visible.append("\n\n")
+                            visible.append(pageResult.text.take((maxCharacters - visible.length).coerceAtLeast(0)))
+                        }
+                        appendMetadataAssist(metadataAssist, pageResult.metadataAssistText)
                     }
-                }.trim().toString()
+                }
+                return RecognizedContent(visible.toString().trim(), metadataAssist.toString().trim())
             }
         }
+    }
+
+    /**
+     * Sparse OCR is intentionally kept out of the visible/stored OCR body. It is
+     * bounded to a few early pages and a small character budget, then supplied
+     * only to MetadataExtractor as secondary evidence for title/provider/date/
+     * protocol candidates missed by normal page segmentation.
+     */
+    private fun appendMetadataAssist(builder: StringBuilder, value: String) {
+        if (value.isBlank() || builder.length >= MAX_METADATA_ASSIST_CHARS) return
+        if (builder.isNotEmpty()) builder.append('\n')
+        builder.append(value.take((MAX_METADATA_ASSIST_CHARS - builder.length).coerceAtLeast(0)))
     }
 
     private fun decodeForOcr(file: File): Bitmap {
@@ -160,9 +192,13 @@ class DocumentProcessor(private val context: Context, private val database: AppD
             sourceName.substringAfterLast('.', "").equals("pdf", true) ||
             (sourceName.isBlank() && document.mimeType.equals("application/pdf", true))
 
+    private data class RecognizedContent(val text: String, val metadataAssistText: String)
+
     private companion object {
         const val OCR_MAX_SIDE = 3_600
         const val MAX_DOCUMENT_OCR_CHARS = 2_000_000
         const val MAX_LOGICAL_PAGES = 1_000
+        const val MAX_METADATA_ASSIST_PAGES = 3
+        const val MAX_METADATA_ASSIST_CHARS = 100_000
     }
 }

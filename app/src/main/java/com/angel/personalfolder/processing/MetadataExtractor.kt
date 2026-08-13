@@ -39,6 +39,14 @@ object MetadataExtractor {
         setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)
     )
     private val datelineContextRegex = Regex("""^[\p{L}\p{M} .΄'’\-]{2,50}[:,]\s*$""")
+    private val schoolProviderAnchor = Regex(
+        """\b\d{1,3}\s*[οo0]?\s*(?:Γυμνάσιο|Λύκειο|Δημοτικό)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val schoolProviderStop = Regex(
+        """\s+(?:με|που|όπου|όπως|για)\s+|[,;|]""",
+        RegexOption.IGNORE_CASE
+    )
 
     private val categoryRules = listOf(
         CategoryRule("Ταυτότητα / προσωπικά", listOf("διαβατήριο", "ταυτότητα", "passport", "personal number", "προσωπικός αριθμός", "άδεια οδήγησης")),
@@ -116,9 +124,22 @@ object MetadataExtractor {
         "expiration"
     )
 
-    fun extract(text: String, fallbackTitle: String): ExtractedMetadata {
-        val normalized = text.replace("\u0000", " ").trim()
-        val lines = normalized.lines().map(String::trim).filter { it.length >= 3 }
+    /**
+     * supplementalText is secondary OCR evidence (for example a sparse-layout
+     * pass). It can help title/provider/date/protocol extraction, but category
+     * scoring intentionally stays on the primary visible OCR text so duplicate
+     * helper text cannot inflate or distort classification.
+     */
+    fun extract(text: String, fallbackTitle: String, supplementalText: String = ""): ExtractedMetadata {
+        val primaryText = text.replace("\u0000", " ").trim()
+        val evidenceText = buildString {
+            append(primaryText)
+            if (supplementalText.isNotBlank()) {
+                if (isNotEmpty()) append('\n')
+                append(supplementalText.replace("\u0000", " ").trim())
+            }
+        }
+        val lines = evidenceText.lines().map(String::trim).filter { it.length >= 3 }
 
         // Do not assume that the first OCR line is the document title. Greek
         // official documents commonly start with state/ministerial hierarchy.
@@ -138,7 +159,7 @@ object MetadataExtractor {
             lines.isEmpty() -> MetadataConfidence.UNKNOWN
             else -> MetadataConfidence.LOW
         }
-        val folded = foldGreek(normalized)
+        val folded = foldGreek(primaryText)
 
         val categoryCandidate = categoryRules.mapNotNull { rule ->
             val matches = rule.terms.map { term ->
@@ -155,7 +176,8 @@ object MetadataExtractor {
         }
 
         val providerCandidate = lines.mapIndexedNotNull { index, line ->
-            providerScore(line)?.let { score -> ProviderCandidate(line.take(120), score, index) }
+            val candidateValue = extractSpecificProvider(line)
+            providerScore(candidateValue)?.let { score -> ProviderCandidate(candidateValue.take(120), score, index) }
         }.maxWithOrNull(compareBy<ProviderCandidate> { it.score }.thenByDescending { it.value.length }.thenBy { it.index })
         val provider = providerCandidate?.value.orEmpty()
         val providerConfidence = when {
@@ -166,12 +188,12 @@ object MetadataExtractor {
         }
         val providerProvenance = providerCandidate?.let { "issuer-marker:${it.score}" } ?: "none"
 
-        val dateMatches = dateRegex.findAll(normalized).mapNotNull { match ->
+        val dateMatches = dateRegex.findAll(evidenceText).mapNotNull { match ->
             normalizeDate(match.value)?.let { canonical ->
                 DateMatch(
                     canonical = canonical,
                     range = match.range,
-                    labelContext = labelContextBeforeDate(normalized, match.range)
+                    labelContext = labelContextBeforeDate(evidenceText, match.range)
                 )
             }
         }.toList()
@@ -216,11 +238,11 @@ object MetadataExtractor {
         val issuedProvenance = issuedCandidate?.let { "issued-${it.issuedSource}:${it.issuedScore}" } ?: "none"
         val expiryProvenance = expiryCandidate?.let { "expiry-keyword:${it.expiryScore}" } ?: "none"
 
-        // Protocol values are matched against the original text so their Greek
-        // letters/case are preserved. OCR often inserts spaces around '/' or '.';
-        // normalize only those separators and never confuse a registry number
-        // with a protocol number unless a protocol label is present.
-        val protocolMatch = protocolRegex.find(normalized)
+        // Protocol values are matched against the original evidence so their
+        // Greek letters/case are preserved. Sparse OCR is especially useful when
+        // normal layout segmentation joins a preceding postal/address field onto
+        // the same line as "Αριθμ. Πρωτ.".
+        val protocolMatch = protocolRegex.find(evidenceText)
         val protocol = protocolMatch?.groupValues?.getOrNull(1)?.let(::normalizeProtocol)
         val protocolConfidence = if (protocol == null) MetadataConfidence.NONE else MetadataConfidence.HIGH
         val protocolProvenance = if (protocol == null) "none" else "protocol-label"
@@ -271,6 +293,13 @@ object MetadataExtractor {
             providerProvenance = providerProvenance,
             protocolProvenance = protocolProvenance
         )
+    }
+
+    private fun extractSpecificProvider(line: String): String {
+        val anchor = schoolProviderAnchor.find(line) ?: return line
+        val candidate = line.substring(anchor.range.first)
+        val stop = schoolProviderStop.find(candidate, anchor.value.length)?.range?.first ?: candidate.length
+        return candidate.substring(0, stop).trim()
     }
 
     private fun titleScore(line: String, index: Int): Int? {

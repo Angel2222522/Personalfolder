@@ -9,9 +9,54 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
+data class OcrRecognition(
+    val text: String,
+    val metadataAssistText: String = ""
+)
+
 class TesseractOcrEngine(private val context: Context) {
-    suspend fun recognize(bitmap: Bitmap): String = withContext(Dispatchers.Default) {
+    suspend fun recognize(bitmap: Bitmap): String = recognizeDetailed(bitmap, includeMetadataAssist = false).text
+
+    /**
+     * The visible OCR stays on PSM_AUTO because it preserves paragraphs/tables
+     * better. A sparse pass is optional and is used only as extra evidence for
+     * metadata fields that the normal layout pass may miss. Sparse text is never
+     * shown to the user or stored as the page OCR text.
+     *
+     * A Greek-only pass is also allowed to repair the Greek side of standard
+     * bilingual identity fields. It is merged only into those known field lines;
+     * the main ell+eng pass remains authoritative for the rest of the document.
+     */
+    suspend fun recognizeDetailed(bitmap: Bitmap, includeMetadataAssist: Boolean = true): OcrRecognition = withContext(Dispatchers.Default) {
         val dataPath = withContext(Dispatchers.IO) { prepareDataPath() }
+        val primaryRaw = recognizePass(dataPath, "ell+eng", TessBaseAPI.PageSegMode.PSM_AUTO, bitmap)
+        val primary = OcrTextPostProcessor.normalizeOcrText(primaryRaw)
+
+        val greekAssist = if (OcrTextPostProcessor.needsGreekAdministrativeFieldAssist(primary)) {
+            runCatching {
+                OcrTextPostProcessor.normalizeOcrText(
+                    recognizePass(dataPath, "ell", TessBaseAPI.PageSegMode.PSM_AUTO, bitmap)
+                )
+            }.getOrDefault("")
+        } else {
+            ""
+        }
+        val displayText = OcrTextPostProcessor.mergeGreekAdministrativeFields(primary, greekAssist)
+
+        val metadataAssist = if (includeMetadataAssist) {
+            runCatching {
+                OcrTextPostProcessor.normalizeOcrText(
+                    recognizePass(dataPath, "ell+eng", TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT, bitmap)
+                )
+            }.getOrDefault("")
+        } else {
+            ""
+        }
+
+        OcrRecognition(text = displayText, metadataAssistText = metadataAssist)
+    }
+
+    private fun recognizePass(dataPath: File, language: String, pageSegMode: Int, bitmap: Bitmap): String {
         val tess = TessBaseAPI()
         try {
             val configuration = mapOf(
@@ -21,16 +66,16 @@ class TesseractOcrEngine(private val context: Context) {
             check(
                 tess.init(
                     dataPath.absolutePath,
-                    "ell+eng",
+                    language,
                     TessBaseAPI.OEM_LSTM_ONLY,
                     configuration
                 )
             ) {
-                "Δεν φορτώθηκαν τα ελληνικά/αγγλικά δεδομένα OCR."
+                "Δεν φορτώθηκαν τα δεδομένα OCR για: $language"
             }
-            tess.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO)
+            tess.setPageSegMode(pageSegMode)
             tess.setImage(bitmap)
-            OcrTextPostProcessor.normalizeOcrText(tess.getUTF8Text().orEmpty())
+            return tess.getUTF8Text().orEmpty()
         } finally {
             tess.recycle()
         }

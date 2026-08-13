@@ -1,6 +1,7 @@
 package com.angel.personalfolder.processing
 
 import java.text.Normalizer
+import java.util.Locale
 
 /**
  * Conservative cleanup applied after OCR. It fixes Unicode noise and a common
@@ -34,6 +35,41 @@ object OcrTextPostProcessor {
         val normalized = normalizeUnicodeAndWhitespace(text)
         val scriptRepaired = MIXED_TOKEN.replace(normalized) { match -> repairMixedGreekToken(match.value) }
         return repairKnownAdministrativeOcrPatterns(scriptRepaired)
+    }
+
+    fun needsGreekAdministrativeFieldAssist(text: String): Boolean =
+        text.lines().any { parseAdministrativeField(it) != null }
+
+    /**
+     * Uses a second Greek-only OCR result only for the Greek prefix of standard
+     * bilingual personal-data fields. Example: if the primary pass returns
+     * "Επώνυμο: NTEPBIZI (DERVISHI...)" and the Greek pass reads the Greek value,
+     * only "Επώνυμο: <Greek value>" is replaced; the Latin parenthetical text
+     * continues to come from the primary bilingual pass.
+     */
+    fun mergeGreekAdministrativeFields(primaryText: String, greekOnlyText: String): String {
+        if (primaryText.isBlank() || greekOnlyText.isBlank()) return primaryText
+        val greekLines = greekOnlyText.lines().mapNotNull { line ->
+            parseAdministrativeField(line)?.let { parsed -> parsed.key to line }
+        }.toMap()
+        if (greekLines.isEmpty()) return primaryText
+
+        return primaryText.lines().joinToString("\n") { primaryLine ->
+            val parsedPrimary = parseAdministrativeField(primaryLine) ?: return@joinToString primaryLine
+            val greekLine = greekLines[parsedPrimary.key] ?: return@joinToString primaryLine
+            val greekPrefix = greekLine.substringBefore('(').trimEnd()
+            val valuePart = greekPrefix.substringAfter(':', missingDelimiterValue = "").trim()
+            val greekLetters = valuePart.count(::isGreekLetter)
+            val latinLetters = valuePart.count(::isLatinLetter)
+            if (greekLetters < MIN_GREEK_FIELD_LETTERS || greekLetters <= latinLetters) return@joinToString primaryLine
+
+            val primaryParen = primaryLine.indexOf('(')
+            if (primaryParen >= 0) {
+                "$greekPrefix ${primaryLine.substring(primaryParen).trimStart()}"
+            } else {
+                greekPrefix
+            }
+        }
     }
 
     fun isUsableNativePdfText(text: String): Boolean {
@@ -109,6 +145,23 @@ object OcrTextPostProcessor {
         return repaired
     }
 
+    private fun parseAdministrativeField(line: String): AdministrativeField? {
+        val match = ADMIN_FIELD_LINE.find(line.trim()) ?: return null
+        val key = when (foldGreek(match.groupValues[1])) {
+            "επωνυμο" -> "surname"
+            "ονομα" -> "name"
+            "πατρωνυμο" -> "father"
+            "μητρωνυμο" -> "mother"
+            else -> return null
+        }
+        return AdministrativeField(key)
+    }
+
+    private fun foldGreek(value: String): String = Normalizer.normalize(
+        value.lowercase(Locale.ROOT),
+        Normalizer.Form.NFD
+    ).replace(Regex("\\p{M}+"), "")
+
     private fun isGreekLetter(character: Char): Boolean =
         character.isLetter() && Character.UnicodeBlock.of(character) in GREEK_BLOCKS
 
@@ -140,6 +193,12 @@ object OcrTextPostProcessor {
         Regex("""\bMntpwvuypo\b""", RegexOption.IGNORE_CASE) to "Μητρώνυμο",
         Regex("""\baitnon\b""", RegexOption.IGNORE_CASE) to "αίτηση"
     )
+    private val ADMIN_FIELD_LINE = Regex(
+        """^(Επώνυμο|Όνομα|Πατρώνυμο|Μητρώνυμο)\s*:?[ \t]*(.+)$""",
+        RegexOption.IGNORE_CASE
+    )
+
+    private data class AdministrativeField(val key: String)
 
     private val MIXED_TOKEN = Regex("[\\p{L}\\p{M}]{2,}")
     private val HORIZONTAL_SPACE = Regex("[\\t \\u00A0\\u2007\\u202F]+")
@@ -147,4 +206,5 @@ object OcrTextPostProcessor {
 
     private const val MIN_NATIVE_MEANINGFUL_CHARS = 8
     private const val MIN_NATIVE_MEANINGFUL_RATIO = 0.45
+    private const val MIN_GREEK_FIELD_LETTERS = 2
 }
