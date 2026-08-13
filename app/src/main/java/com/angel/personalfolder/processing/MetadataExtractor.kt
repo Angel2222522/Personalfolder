@@ -39,7 +39,34 @@ object MetadataExtractor {
 
     private val categoryRules = listOf(
         CategoryRule("Ταυτότητα / προσωπικά", listOf("διαβατήριο", "ταυτότητα", "passport", "personal number", "προσωπικός αριθμός", "άδεια οδήγησης")),
-        CategoryRule("Μετανάστευση / άδειες", listOf("άδεια διαμονής", "μετανάστευση", "migration", "residence permit", "visa", "ασύλου")),
+        CategoryRule(
+            "Μετανάστευση / άδειες",
+            listOf(
+                "άδεια διαμονής",
+                "άδεια παραμονής",
+                "τίτλος διαμονής",
+                "δελτίο διαμονής",
+                "κάρτα διαμονής",
+                "residence permit",
+                "residence card",
+                "residence document",
+                "residence title",
+                "permit type",
+                "τύπος άδειας",
+                "είδος άδειας",
+                "μετανάστευση",
+                "migration",
+                "visa",
+                "ασύλου",
+                "πολίτης τρίτης χώρας",
+                "πολιτών τρίτων χωρών",
+                "δεύτερης γενιάς",
+                "second generation",
+                "ενιαίου τύπου",
+                "υπουργείο μετανάστευσης",
+                "ministry of migration"
+            )
+        ),
         CategoryRule("Κατοικία", listOf("μισθωτήριο", "μίσθωση", "ενοίκιο", "κατοικία", "μισθωτής", "διεύθυνση κατοικίας")),
         CategoryRule("Δημόσιες υπηρεσίες", listOf("gov.gr", "ααδε", "εφκα", "δήμος", "δημόσια υπηρεσία", "δημόσιο", "αίτηση", "βεβαίωση")),
         CategoryRule("Εργασία", listOf("σύμβαση εργασίας", "εργασία", "εργοδότης", "μισθός", "ένσημα", "employment")),
