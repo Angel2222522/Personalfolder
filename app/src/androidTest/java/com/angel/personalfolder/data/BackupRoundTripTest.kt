@@ -10,6 +10,7 @@ import com.angel.personalfolder.security.FileCrypto
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.nio.charset.StandardCharsets
+import java.time.LocalDate
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -106,6 +107,43 @@ class BackupRoundTripTest {
             FileCrypto.decryptToTemp(File(restored!!.encryptedPath), plain)
             assertEquals("sensitive page", plain.readText())
             plain.delete()
+        }
+    }
+
+    @Test
+    fun portableRoundTripPreservesAValidFarFutureReminder() {
+        runBlocking {
+            val dueAt = ReminderDatePolicy.dueAt(LocalDate.of(2099, 12, 31), 30)
+            val deadlineAt = ReminderDatePolicy.deadlineAt(LocalDate.of(2099, 12, 31))
+            database.reminderDao().insert(
+                ReminderEntity(
+                    id = "reminder-${UUID.randomUUID()}",
+                    title = "Μελλοντική υπενθύμιση",
+                    dueAt = dueAt,
+                    documentId = documentId,
+                    leadDays = 30,
+                    deadlineAt = deadlineAt
+                )
+            )
+            val backup = context.cacheDir.resolve("share/backup-test-future.pfb").apply { parentFile?.mkdirs(); createNewFile() }
+            val backupUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", backup)
+            try {
+                val service = BackupService(context)
+                service.create(backupUri, password)
+                database.withTransaction {
+                    database.documentPageDao().deleteForDocument(documentId)
+                    database.documentDao().deleteById(documentId)
+                }
+                FileCrypto.deleteRecursively(documentRoot)
+                service.restore(backupUri, password)
+
+                val restored = database.reminderDao().getForDocument(documentId)
+                assertEquals(1, restored.size)
+                assertEquals(dueAt, restored.single().dueAt)
+                assertEquals(deadlineAt, restored.single().deadlineAt)
+            } finally {
+                backup.delete()
+            }
         }
     }
 

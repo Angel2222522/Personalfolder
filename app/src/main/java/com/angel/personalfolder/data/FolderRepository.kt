@@ -381,6 +381,7 @@ class FolderRepository(private val context: Context) {
         DataOperationCoordinator.requireUserSessionUnlocked()
         // Keep COMPLETED reminder behavior unchanged until PF-018 is decided;
         // ARCHIVED is only a display status at present.
+        LibraryLimits.requireText(status, LibraryLimits.MAX_CASE_STATUS_CHARS, "Η κατάσταση υπόθεσης είναι υπερβολικά μεγάλη.")
         require(database.timelineDao().count() < LibraryLimits.MAX_TIMELINE_EVENTS) { "Η βιβλιοθήκη έχει φτάσει το όριο γεγονότων." }
         database.caseDao().updateStatus(id, status, System.currentTimeMillis())
         database.timelineDao().insert(

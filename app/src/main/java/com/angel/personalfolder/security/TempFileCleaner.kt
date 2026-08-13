@@ -50,14 +50,12 @@ object TempFileCleaner {
     }
 
     private fun isStale(file: File, now: Long, maxAge: Long): Boolean {
-        val modified = file.lastModified()
-        if (modified <= 0L) return true
-        // Startup cleanup runs while the normal operation gate is closed, so
-        // a timestamp far in the future cannot belong to a live operation.
-        // Treating it as stale prevents a backwards clock change from
-        // keeping orphan plaintext/staging data indefinitely.
-        if (modified > now + CLOCK_SKEW_TOLERANCE_MS) return true
-        return now >= modified && now - modified >= maxAge
+        return TempFileCleanupPolicy.isStale(
+            modifiedAt = file.lastModified(),
+            now = now,
+            maxAgeMs = maxAge,
+            clockSkewToleranceMs = CLOCK_SKEW_TOLERANCE_MS
+        )
     }
 
     private const val CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000L
