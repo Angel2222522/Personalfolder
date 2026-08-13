@@ -27,6 +27,7 @@ class ReminderDeliveryPolicyTest {
     @Test
     fun delayDoesNotOverflowForLongFutureTimestamp() {
         assertTrue(ReminderDeliveryPolicy.initialDelayMs(Long.MAX_VALUE, 0L) > 0L)
+        assertEquals(Long.MAX_VALUE, ReminderDeliveryPolicy.initialDelayMs(Long.MAX_VALUE, Long.MIN_VALUE))
         assertEquals(0L, ReminderDeliveryPolicy.initialDelayMs(Long.MIN_VALUE, 0L))
     }
 }

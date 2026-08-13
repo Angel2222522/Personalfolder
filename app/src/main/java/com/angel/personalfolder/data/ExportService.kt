@@ -55,6 +55,7 @@ class ExportService(private val context: Context) {
                     output.write(manifest.toString().toByteArray(Charsets.UTF_8))
                     output.closeEntry()
                     documents.forEach { document ->
+                        DataOperationCoordinator.requireUserSessionUnlocked()
                         DataOperationCoordinator.withDocumentExclusive(document.id) {
                             val documentPages = pages.filter { it.documentId == document.id }.sortedBy { it.pageIndex }
                             require(documentPages.isNotEmpty()) { "Λείπει σελίδα από το έγγραφο «${document.title}»." }
@@ -106,6 +107,7 @@ class ExportService(private val context: Context) {
             try {
                 val sources = database.documentPageDao().getForDocument(document.id)
                     .sortedBy { it.pageIndex }
+                DataOperationCoordinator.requireUserSessionUnlocked()
                 val originalPdf = sources.singleOrNull()?.takeIf { isPdf(it.mimeType, it.sourceFileName, document) }
                 if (originalPdf != null) {
                     // Opening/sharing an imported single-source PDF should
@@ -132,6 +134,7 @@ class ExportService(private val context: Context) {
     private suspend fun buildPdfFile(documents: List<DocumentEntity>, output: File, lockDocuments: Boolean = true) {
         val pages = mutableListOf<Pair<DocumentEntity, LogicalDocumentPage>>()
         documents.forEach { document ->
+            DataOperationCoordinator.requireUserSessionUnlocked()
             val logicalPages = if (lockDocuments) {
                 DataOperationCoordinator.withDocumentExclusive(document.id) {
                     renderService.logicalPages(document, lockDocument = false)
@@ -146,6 +149,7 @@ class ExportService(private val context: Context) {
         FileOutputStream(output).use { stream ->
             StreamingPdfWriter(stream, pages.size).use { writer ->
                 pages.forEach { (document, page) ->
+                    DataOperationCoordinator.requireUserSessionUnlocked()
                     val bitmap = renderService.renderPage(document, page, lockDocument = lockDocuments)
                     try {
                         writer.writePage(bitmap)

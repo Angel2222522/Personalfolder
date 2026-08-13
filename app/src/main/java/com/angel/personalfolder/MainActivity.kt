@@ -170,7 +170,9 @@ class MainActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
-        lifecycleScope.launch { runCatching { ReminderScheduler.rescheduleAll(this@MainActivity) } }
+        if (!lockEnabled || sessionUnlocked) {
+            lifecycleScope.launch { runCatching { ReminderScheduler.rescheduleAll(this@MainActivity) } }
+        }
         if (lockEnabled && !canAuthenticate()) {
             sessionUnlocked = false
             updateSessionState()

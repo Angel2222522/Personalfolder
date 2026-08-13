@@ -130,6 +130,7 @@ class BackupService(private val context: Context) {
                     output.write(manifestBytes)
                     output.closeEntry()
                     pages.distinctBy { it.documentId to it.pageIndex }.forEach { page ->
+                        DataOperationCoordinator.requireUserSessionUnlocked()
                         DataOperationCoordinator.withDocumentExclusive(page.documentId) {
                         val source = File(page.encryptedPath)
                         require(FileCrypto.isPrivateDocumentFile(context, source)) { "Η σελίδα βρίσκεται εκτός του ιδιωτικού χώρου." }
@@ -148,6 +149,7 @@ class BackupService(private val context: Context) {
                         }
                     }
                 }
+            DataOperationCoordinator.requireUserSessionUnlocked()
             BackupSizePolicy.requireArchiveSize(zip.length())
             BackupCrypto.encryptFile(zip, context, destination, password.toCharArray())
             true
@@ -340,7 +342,9 @@ class BackupService(private val context: Context) {
             // Parsing, decrypting and PDF validation above do not hold the
             // process-wide mutex. Only the filesystem swap and Room commit
             // are serialized as one short generation transition.
+            DataOperationCoordinator.requireUserSessionUnlocked()
             DataOperationCoordinator.withExclusive {
+                DataOperationCoordinator.requireUserSessionUnlocked()
                 previousMoved = if (root.exists()) {
                     require(root.isDirectory) { "Ο χώρος εγγράφων δεν είναι έγκυρος κατάλογος." }
                     require(root.renameTo(previousRoot)) { "Δεν ήταν δυνατή η προετοιμασία της επαναφοράς." }
