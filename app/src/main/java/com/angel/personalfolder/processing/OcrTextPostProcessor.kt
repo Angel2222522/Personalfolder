@@ -79,9 +79,11 @@ object OcrTextPostProcessor {
         if (latinLetters.isEmpty()) return token
         if (latinLetters.any { it !in latinToGreekUppercase }) return token
 
-        // At least two Greek letters makes the intent strong enough to repair
-        // look-alike Latin capitals without touching genuine English words.
-        if (greekCount < 2) return token
+        // A longer mixed token with only visually-confusable Latin capitals is
+        // overwhelmingly likely to be an OCR script error (e.g. AΔEIA). Short
+        // identifiers remain untouched unless they contain multiple Greek letters.
+        val strongGreekIntent = greekCount >= 2 || token.length >= 5
+        if (!strongGreekIntent) return token
         return token.map { latinToGreekUppercase[it] ?: it }.joinToString("")
     }
 
