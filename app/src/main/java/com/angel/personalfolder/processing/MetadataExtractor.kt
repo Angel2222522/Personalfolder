@@ -33,9 +33,12 @@ data class ExtractedMetadata(
 object MetadataExtractor {
     private val dateRegex = Regex("""(?<!\d)(\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})(?!\d)""")
     private val protocolRegex = Regex(
-        // Horizontal whitespace only: \s also matches newlines and previously let
-        // a protocol capture spill into the next OCR line.
-        """^[ \t]*(?:αριθμ(?:ός|ος)?\.?[ \t]+πρωτ(?:οκ(?:ό|ο)λλου)?\.?|αρ\.?[ \t]*πρωτ(?:οκ(?:ό|ο)λλου)?\.?|protocol(?:[ \t]+(?:no|number)\.?)?)[ \t]*[:#№-]?[ \t]*([\p{L}\d][\p{L}\d./_\- \t]{1,119})[ \t]*$""",
+        // A protocol label may start its OCR line or appear in a parallel
+        // right-hand column after a large horizontal gap. Requiring one of
+        // those two positions avoids treating narrative legal citations as the
+        // document's own protocol number. Mixed Greek/Latin initial letters are
+        // accepted because OCR commonly confuses visually identical glyphs.
+        """(?:^|[ \t]{2,})(?:(?:[ΑAαa]ριθ(?:μ(?:ός|ος)?)?\.?|[ΑAαa]ρ\.?)[ \t]*(?:[ΠPπp]ρωτ(?:οκ(?:ό|ο)λλου)?\.?)[ \t]*[:#№-]?[ \t]*([\p{L}\d][\p{L}\d./_\-]{1,79})|protocol(?:[ \t]+(?:no|number)\.?)?[ \t]*[:#№-]?[ \t]*([\p{L}\d][\p{L}\d./_\-]{1,79}))""",
         setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)
     )
     private val datelineContextRegex = Regex("""^[\p{L}\p{M} .΄'’\-]{2,50}[:,]\s*$""")
@@ -237,7 +240,7 @@ object MetadataExtractor {
         val expiryProvenance = expiryCandidate?.let { "expiry-keyword:${it.expiryScore}" } ?: "none"
 
         val protocolMatch = protocolRegex.find(evidenceText)
-        val protocol = protocolMatch?.groupValues?.getOrNull(1)?.let(::normalizeProtocol)
+        val protocol = protocolMatch?.groupValues?.drop(1)?.firstOrNull(String::isNotBlank)?.let(::normalizeProtocol)
         val protocolConfidence = if (protocol == null) MetadataConfidence.NONE else MetadataConfidence.HIGH
         val protocolProvenance = if (protocol == null) "none" else "protocol-label"
         val keywords = categoryRules.flatMap { (name, terms) ->
