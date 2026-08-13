@@ -134,6 +134,16 @@ class MetadataExtractorTest {
     }
 
     @Test
+    fun keepsCombinedGreekStateAndMinistryHeadingAsTheStrongestProviderCandidate() {
+        val result = MetadataExtractor.extract(
+            "Ελληνική Δημοκρατία - Υπουργείο Παιδείας\nΔιεύθυνση Διοικητικού",
+            "Έγγραφο"
+        )
+        assertEquals("Ελληνική Δημοκρατία - Υπουργείο Παιδείας", result.provider)
+        assertEquals("high", result.providerConfidence)
+    }
+
+    @Test
     fun usesUiCategoriesAndSpecificEmploymentRule() {
         val result = MetadataExtractor.extract("Σύμβαση εργασίας\nΕργοδότης", "Έγγραφο")
         assertEquals("Εργασία", result.category)

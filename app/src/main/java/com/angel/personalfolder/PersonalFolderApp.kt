@@ -9,7 +9,10 @@ import com.angel.personalfolder.data.AppDatabase
 import com.angel.personalfolder.data.BackupService
 import com.angel.personalfolder.data.DataOperationCoordinator
 import com.angel.personalfolder.data.DocumentDeletionRecovery
+import com.angel.personalfolder.data.FolderRepository
 import com.angel.personalfolder.data.ReminderScheduler
+import com.angel.personalfolder.processing.DocumentProcessor
+import com.angel.personalfolder.security.StartupRecoveryStateStore
 import com.angel.personalfolder.security.TempFileCleaner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,22 +26,27 @@ class PersonalFolderApp : Application() {
         super.onCreate()
         DataOperationCoordinator.beginStartupRecovery()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            var succeeded = false
+            var failureMessage: String? = null
             try {
-                try {
-                    BackupService(this@PersonalFolderApp).recoverInterruptedRestore()
-                } catch (error: Throwable) {
-                    android.util.Log.w("PersonalFolder", "Restore recovery was not completed: ${error::class.java.simpleName}")
-                }
-                try {
-                    DocumentDeletionRecovery.recover(this@PersonalFolderApp, database)
-                } catch (error: Throwable) {
-                    android.util.Log.w("PersonalFolder", "Document deletion recovery was not completed: ${error::class.java.simpleName}")
-                }
+                StartupRecoveryStateStore.markInProgress(this@PersonalFolderApp)
+                BackupService(this@PersonalFolderApp).recoverInterruptedRestore()
+                DocumentDeletionRecovery.recover(this@PersonalFolderApp, database)
+                DocumentProcessor.reconcileInterruptedProcessing(database)
+                FolderRepository(this@PersonalFolderApp).reconcileQueuedOcr()
+                runCatching { TempFileCleaner.recover(this@PersonalFolderApp) }
+                    .onFailure { android.util.Log.w("PersonalFolder", "Temporary-file cleanup was deferred", it) }
+                runCatching { ReminderScheduler.rescheduleAll(this@PersonalFolderApp) }
+                    .onFailure { android.util.Log.w("PersonalFolder", "Reminder rescheduling was deferred", it) }
+                StartupRecoveryStateStore.markSafe(this@PersonalFolderApp)
+                succeeded = true
+            } catch (error: Throwable) {
+                failureMessage = error.message?.take(500) ?: "Η ανάκτηση της βιβλιοθήκης απέτυχε."
+                android.util.Log.e("PersonalFolder", "Startup recovery blocked normal operations", error)
+                runCatching { StartupRecoveryStateStore.markBlocked(this@PersonalFolderApp, failureMessage!!) }
             } finally {
-                DataOperationCoordinator.completeStartupRecovery()
+                DataOperationCoordinator.completeStartupRecovery(succeeded, failureMessage)
             }
-            TempFileCleaner.recover(this@PersonalFolderApp)
-            ReminderScheduler.rescheduleAll(this@PersonalFolderApp)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(

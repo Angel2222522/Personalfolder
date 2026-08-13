@@ -23,7 +23,7 @@ import android.os.ParcelFileDescriptor
 class FolderRepository(private val context: Context) {
     private val database = AppDatabase.get(context)
 
-    fun documents(query: String): kotlinx.coroutines.flow.Flow<List<DocumentEntity>> =
+    fun documents(query: String): kotlinx.coroutines.flow.Flow<List<DocumentSummary>> =
         documents(query, "", "", null, false)
 
     fun documents(
@@ -45,16 +45,20 @@ class FolderRepository(private val context: Context) {
     fun pendingReminders() = database.reminderDao().observePending()
     fun allDocuments() = database.documentDao().observeAll()
     suspend fun document(id: String) = database.documentDao().getById(id)
+    fun documentFlow(id: String) = database.documentDao().observeById(id)
     fun timeline(caseId: String) = database.timelineDao().observeForCase(caseId)
     fun checklist(caseId: String) = database.checklistDao().observeForCase(caseId)
     fun caseDocuments(caseId: String) = database.caseDocumentDao().observeDocumentsForCase(caseId)
 
-    suspend fun importUris(uris: List<Uri>): String? = DataOperationCoordinator.withExclusive { withContext(Dispatchers.IO) {
+    suspend fun importUris(uris: List<Uri>): String? = withContext(Dispatchers.IO) {
+        DataOperationCoordinator.requireUserSessionUnlocked()
         val distinctUris = uris.distinct()
         if (distinctUris.isEmpty()) return@withContext null
-        require(distinctUris.size <= MAX_IMPORT_SOURCES) { "Μπορείς να εισαγάγεις έως $MAX_IMPORT_SOURCES σελίδες κάθε φορά." }
+        LibraryLimits.requireSourceCount(distinctUris.size)
         val id = UUID.randomUUID().toString()
-        val documentDirectory = File(context.filesDir, "documents/$id").apply { mkdirs() }
+        val documentDirectory = File(context.filesDir, "documents/$id").apply {
+            require(mkdirs() || isDirectory) { "Δεν ήταν δυνατή η δημιουργία του ιδιωτικού χώρου εγγράφου." }
+        }
         val pages = mutableListOf<DocumentPageEntity>()
         val sourceCounts = mutableListOf<Int>()
         var firstName = "Έγγραφο"
@@ -84,7 +88,7 @@ class FolderRepository(private val context: Context) {
                 require(totalBytes <= MAX_DOCUMENT_BYTES) { "Το έγγραφο είναι υπερβολικά μεγάλο συνολικά." }
                 if (mime.startsWith("image/")) validateEncryptedImage(target, name)
                 val pageCount = countEncryptedSourcePages(target, mime, name)
-                require(sourceCounts.sum() + pageCount <= MAX_LOGICAL_PAGES) { "Το έγγραφο περιέχει υπερβολικά πολλές σελίδες." }
+                LibraryLimits.requireLogicalPagesPerDocument(sourceCounts.sum() + pageCount)
                 pages += DocumentPageEntity(
                     documentId = id,
                     pageIndex = index,
@@ -94,11 +98,13 @@ class FolderRepository(private val context: Context) {
                 )
                 sourceCounts += pageCount
             }
-            require(database.documentDao().getAll().size < MAX_DOCUMENTS) { "Η βιβλιοθήκη έχει φτάσει το όριο εγγράφων." }
-            require(currentStorageBytes() + totalBytes <= MAX_TOTAL_STORAGE_BYTES) { "Ο ιδιωτικός χώρος εγγράφων έχει φτάσει το όριό του." }
             val now = System.currentTimeMillis()
             val logicalPageCount = sourceCounts.sum().coerceAtLeast(pages.size)
-            database.withTransaction {
+            DataOperationCoordinator.withExclusive {
+                require(database.documentDao().count() < LibraryLimits.MAX_DOCUMENTS) { "Η βιβλιοθήκη έχει φτάσει το όριο εγγράφων." }
+                LibraryLimits.requireTotalLogicalPages(database.documentDao().totalLogicalPageCount() + logicalPageCount)
+                require(currentStorageBytes() + totalBytes <= MAX_TOTAL_STORAGE_BYTES) { "Ο ιδιωτικός χώρος εγγράφων έχει φτάσει το όριό του." }
+                database.withTransaction {
                 database.documentDao().insert(
                     DocumentEntity(
                         id = id,
@@ -112,15 +118,24 @@ class FolderRepository(private val context: Context) {
                     )
                 )
                 database.documentPageDao().insertAll(pages)
+                }
             }
             databaseCommitted = true
-            enqueueOcr(id)
+            if (!enqueueOcr(id)) {
+                DataOperationCoordinator.withExclusive {
+                    database.documentDao().getById(id)?.let { current ->
+                        database.documentDao().update(
+                            current.copy(processingError = "Η επεξεργασία OCR θα επαναληφθεί αυτόματα.")
+                        )
+                    }
+                }
+            }
             id
         } catch (error: Throwable) {
             if (!databaseCommitted) FileCrypto.deleteRecursively(documentDirectory)
             throw error
         }
-    } }
+    }
 
     suspend fun updateDocumentMetadata(
         id: String,
@@ -133,7 +148,9 @@ class FolderRepository(private val context: Context) {
         protocolNumber: String?,
         confirmedFields: MetadataFieldConfirmations? = null
     ) {
-        DataOperationCoordinator.withExclusive {
+        DataOperationCoordinator.requireUserSessionUnlocked()
+        val reminderData = DataOperationCoordinator.withDocumentExclusive(id) {
+            DataOperationCoordinator.withExclusive {
             val cleanTitle = title.trim().ifBlank { "Έγγραφο" }
             val cleanCategory = category.trim().ifBlank { "Άλλα" }
             val cleanTags = tags.trim()
@@ -196,41 +213,61 @@ class FolderRepository(private val context: Context) {
                     updatedAt = System.currentTimeMillis()
                 )
             )
-            ReminderScheduler.replaceForDocument(context, id, cleanTitle, cleanExpiry)
+            cleanTitle to cleanExpiry
+            }
         }
+        runCatching { ReminderScheduler.replaceForDocument(context, id, reminderData.first, reminderData.second) }
+            .onFailure { android.util.Log.w("PersonalFolder", "Document reminder reconciliation deferred", it) }
     }
 
     suspend fun retryOcr(id: String) {
-        DataOperationCoordinator.withExclusive {
-            require(database.documentDao().getById(id) != null) { "Το έγγραφο δεν βρέθηκε." }
-            enqueueOcr(id)
+        DataOperationCoordinator.requireUserSessionUnlocked()
+        DataOperationCoordinator.withDocumentExclusive(id) {
+            DataOperationCoordinator.withExclusive {
+                require(database.documentDao().getById(id) != null) { "Το έγγραφο δεν βρέθηκε." }
+                database.documentDao().getById(id)?.let { current ->
+                    database.documentDao().update(
+                        current.copy(processingState = ProcessingState.QUEUED, processingError = null, updatedAt = System.currentTimeMillis())
+                    )
+                }
+            }
+            require(enqueueOcr(id)) { "Δεν ήταν δυνατή η τοποθέτηση της επεξεργασίας σε ουρά." }
         }
     }
 
     suspend fun deleteDocument(id: String) {
-        DataOperationCoordinator.withExclusive {
+        DataOperationCoordinator.requireUserSessionUnlocked()
+        DataOperationCoordinator.withDocumentExclusive(id) {
             require(database.documentDao().getById(id) != null) { "Το έγγραφο δεν βρέθηκε." }
+            val reminderIds = database.reminderDao().getForDocument(id).map { it.id }
             WorkManager.getInstance(context).cancelUniqueWork("ocr_$id")
-            ReminderScheduler.removeForDocument(context, id)
             val root = context.filesDir.resolve("documents/$id")
             val quarantine = context.cacheDir.resolve("deleted_documents/${id}_${UUID.randomUUID()}")
             var quarantined = false
             var databaseCommitted = false
             try {
-                if (root.exists()) {
-                    DocumentDeletionRecovery.writeJournal(context, id, root, quarantine, "prepared")
-                    quarantine.parentFile?.mkdirs()
-                    require(root.renameTo(quarantine)) { "Δεν ήταν δυνατή η προετοιμασία της διαγραφής." }
-                    quarantined = true
-                    DocumentDeletionRecovery.writeJournal(context, id, root, quarantine, "quarantined")
+                DataOperationCoordinator.withExclusive {
+                    if (root.exists()) {
+                        DocumentDeletionRecovery.writeJournal(context, id, root, quarantine, "prepared")
+                        quarantine.parentFile?.mkdirs()
+                        require(root.renameTo(quarantine)) { "Δεν ήταν δυνατή η προετοιμασία της διαγραφής." }
+                        quarantined = true
+                        DocumentDeletionRecovery.writeJournal(context, id, root, quarantine, "quarantined")
+                    }
+                    database.withTransaction {
+                        database.documentDao().deleteById(id)
+                        // The current schema cascades these rows. Explicitly
+                        // cleaning them after the parent delete also repairs old
+                        // databases that were created before FK enforcement.
+                        database.caseDocumentDao().deleteForDocument(id)
+                        database.reminderDao().deleteForDocument(id)
+                        database.documentPageDao().deleteForDocument(id)
+                    }
+                    databaseCommitted = true
                 }
-                database.withTransaction {
-                    database.caseDocumentDao().deleteForDocument(id)
-                    database.reminderDao().deleteForDocument(id)
-                    database.documentPageDao().deleteForDocument(id)
-                    database.documentDao().deleteById(id)
+                reminderIds.forEach { reminderId ->
+                    runCatching { WorkManager.getInstance(context).cancelUniqueWork("reminder_$reminderId") }
                 }
-                databaseCommitted = true
                 if (quarantined) {
                     DocumentDeletionRecovery.writeJournal(context, id, root, quarantine, "database_committed")
                     FileCrypto.deleteRecursivelyStrict(quarantine)
@@ -259,24 +296,31 @@ class FolderRepository(private val context: Context) {
         deadline: String?,
         nextStep: String,
         notes: String
-    ): String = DataOperationCoordinator.withExclusive {
-        val cleanTitle = title.trim().ifBlank { error("Η υπόθεση χρειάζεται τίτλο.") }
-        val cleanStart = startDate.cleanDateOrNull("Η ημερομηνία έναρξης δεν είναι έγκυρη.")
-        val cleanDeadline = deadline.cleanDateOrNull("Η προθεσμία δεν είναι έγκυρη.")
-        val id = UUID.randomUUID().toString()
-        val now = System.currentTimeMillis()
-        database.withTransaction {
-            database.caseDao().insert(CaseEntity(id, cleanTitle, description.trim(), startDate = cleanStart, deadline = cleanDeadline, nextStep = nextStep.trim(), notes = notes.trim(), createdAt = now, updatedAt = now))
-            database.timelineDao().insert(
-                TimelineEventEntity(
-                    id = UUID.randomUUID().toString(), caseId = id,
-                    title = "Η υπόθεση δημιουργήθηκε", eventType = "system",
-                    eventDate = LocalDate.now().toString(), createdAt = now
+    ): String {
+        DataOperationCoordinator.requireUserSessionUnlocked()
+        val result: Triple<String, String, String?> = DataOperationCoordinator.withExclusive {
+            val cleanTitle = title.trim().ifBlank { error("Η υπόθεση χρειάζεται τίτλο.") }
+            val cleanStart = startDate.cleanDateOrNull("Η ημερομηνία έναρξης δεν είναι έγκυρη.")
+            val cleanDeadline = deadline.cleanDateOrNull("Η προθεσμία δεν είναι έγκυρη.")
+            val id = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
+            require(database.caseDao().count() < LibraryLimits.MAX_CASES) { "Η βιβλιοθήκη έχει φτάσει το όριο υποθέσεων." }
+            require(database.timelineDao().count() < LibraryLimits.MAX_TIMELINE_EVENTS) { "Η βιβλιοθήκη έχει φτάσει το όριο γεγονότων." }
+            database.withTransaction {
+                database.caseDao().insert(CaseEntity(id, cleanTitle, description.trim(), startDate = cleanStart, deadline = cleanDeadline, nextStep = nextStep.trim(), notes = notes.trim(), createdAt = now, updatedAt = now))
+                database.timelineDao().insert(
+                    TimelineEventEntity(
+                        id = UUID.randomUUID().toString(), caseId = id,
+                        title = "Η υπόθεση δημιουργήθηκε", eventType = "system",
+                        eventDate = LocalDate.now().toString(), createdAt = now
+                    )
                 )
-            )
+            }
+            Triple(id, cleanTitle, cleanDeadline)
         }
-        ReminderScheduler.replaceForCase(context, id, cleanTitle, cleanDeadline)
-        id
+        runCatching { ReminderScheduler.replaceForCase(context, result.first, result.second, result.third) }
+            .onFailure { android.util.Log.w("PersonalFolder", "Case reminder reconciliation deferred", it) }
+        return result.first
     }
 
     suspend fun updateCase(
@@ -288,25 +332,42 @@ class FolderRepository(private val context: Context) {
         deadline: String?,
         nextStep: String,
         notes: String
-    ) = DataOperationCoordinator.withExclusive {
+    ) {
+        DataOperationCoordinator.requireUserSessionUnlocked()
         // PF-018 remains a product decision: status changes do not silently
         // alter reminder semantics until the product specifies whether
         // COMPLETED cases should retain deadlines/reminders.
-        val cleanTitle = title.trim().ifBlank { error("Η υπόθεση χρειάζεται τίτλο.") }
-        val cleanStart = startDate.cleanDateOrNull("Η ημερομηνία έναρξης δεν είναι έγκυρη.")
-        val cleanDeadline = deadline.cleanDateOrNull("Η προθεσμία δεν είναι έγκυρη.")
-        database.caseDao().update(id, cleanTitle, description.trim(), status, cleanStart, cleanDeadline, nextStep.trim(), notes.trim(), System.currentTimeMillis())
-        ReminderScheduler.replaceForCase(context, id, cleanTitle, cleanDeadline)
+        val reminderData: Pair<String, String?> = DataOperationCoordinator.withExclusive {
+            val cleanTitle = title.trim().ifBlank { error("Η υπόθεση χρειάζεται τίτλο.") }
+            val cleanStart = startDate.cleanDateOrNull("Η ημερομηνία έναρξης δεν είναι έγκυρη.")
+            val cleanDeadline = deadline.cleanDateOrNull("Η προθεσμία δεν είναι έγκυρη.")
+            database.caseDao().update(id, cleanTitle, description.trim(), status, cleanStart, cleanDeadline, nextStep.trim(), notes.trim(), System.currentTimeMillis())
+            cleanTitle to cleanDeadline
+        }
+        runCatching { ReminderScheduler.replaceForCase(context, id, reminderData.first, reminderData.second) }
+            .onFailure { android.util.Log.w("PersonalFolder", "Case reminder reconciliation deferred", it) }
     }
 
-    suspend fun deleteCase(id: String) = DataOperationCoordinator.withExclusive {
-        ReminderScheduler.removeForCase(context, id)
-        database.caseDao().deleteById(id)
+    suspend fun deleteCase(id: String) {
+        DataOperationCoordinator.requireUserSessionUnlocked()
+        val reminderIds = DataOperationCoordinator.withExclusive {
+            val ids = database.reminderDao().getForCase(id).map { it.id }
+            database.withTransaction {
+                database.caseDao().deleteById(id)
+                database.reminderDao().deleteForCase(id)
+            }
+            ids
+        }
+        reminderIds.forEach { reminderId ->
+            runCatching { WorkManager.getInstance(context).cancelUniqueWork("reminder_$reminderId") }
+        }
     }
 
     suspend fun updateCaseStatus(id: String, status: String) = DataOperationCoordinator.withExclusive {
+        DataOperationCoordinator.requireUserSessionUnlocked()
         // Keep COMPLETED reminder behavior unchanged until PF-018 is decided;
         // ARCHIVED is only a display status at present.
+        require(database.timelineDao().count() < LibraryLimits.MAX_TIMELINE_EVENTS) { "Η βιβλιοθήκη έχει φτάσει το όριο γεγονότων." }
         database.caseDao().updateStatus(id, status, System.currentTimeMillis())
         database.timelineDao().insert(
             TimelineEventEntity(
@@ -318,6 +379,7 @@ class FolderRepository(private val context: Context) {
     }
 
     suspend fun attachDocumentToCase(caseId: String, documentId: String) = DataOperationCoordinator.withExclusive {
+        DataOperationCoordinator.requireUserSessionUnlocked()
         require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
         require(database.documentDao().getById(documentId) != null) { "Το έγγραφο δεν βρέθηκε." }
         database.caseDocumentDao().insert(CaseDocumentCrossRef(caseId, documentId))
@@ -327,11 +389,14 @@ class FolderRepository(private val context: Context) {
     }
 
     suspend fun detachDocumentFromCase(caseId: String, documentId: String) = DataOperationCoordinator.withExclusive {
+        DataOperationCoordinator.requireUserSessionUnlocked()
         database.caseDocumentDao().delete(caseId, documentId)
     }
 
     suspend fun addTimelineEvent(caseId: String, title: String, note: String) = DataOperationCoordinator.withExclusive {
+        DataOperationCoordinator.requireUserSessionUnlocked()
         require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
+        require(database.timelineDao().count() < LibraryLimits.MAX_TIMELINE_EVENTS) { "Η βιβλιοθήκη έχει φτάσει το όριο γεγονότων." }
         database.timelineDao().insert(
             TimelineEventEntity(
                 id = UUID.randomUUID().toString(), caseId = caseId, title = title.trim(), note = note.trim(),
@@ -341,36 +406,56 @@ class FolderRepository(private val context: Context) {
     }
 
     suspend fun addChecklistItem(caseId: String, title: String, linkedDocumentId: String? = null) = DataOperationCoordinator.withExclusive {
+        DataOperationCoordinator.requireUserSessionUnlocked()
         require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
+        require(database.checklistDao().count() < LibraryLimits.MAX_CHECKLIST_ITEMS) { "Η βιβλιοθήκη έχει φτάσει το όριο λίστας." }
         if (linkedDocumentId != null) require(database.documentDao().getById(linkedDocumentId) != null) { "Το έγγραφο δεν βρέθηκε." }
         database.checklistDao().insert(ChecklistItemEntity(UUID.randomUUID().toString(), caseId, title.trim(), linkedDocumentId = linkedDocumentId, createdAt = System.currentTimeMillis()))
     }
 
     suspend fun setChecklistComplete(id: String, complete: Boolean) = DataOperationCoordinator.withExclusive {
+        DataOperationCoordinator.requireUserSessionUnlocked()
         database.checklistDao().setComplete(id, complete)
     }
 
     suspend fun linkChecklistDocument(id: String, documentId: String?) = DataOperationCoordinator.withExclusive {
+        DataOperationCoordinator.requireUserSessionUnlocked()
         if (documentId != null) require(database.documentDao().getById(documentId) != null) { "Το έγγραφο δεν βρέθηκε." }
         database.checklistDao().linkDocument(id, documentId)
     }
 
     suspend fun deleteChecklistItem(id: String) = DataOperationCoordinator.withExclusive {
+        DataOperationCoordinator.requireUserSessionUnlocked()
         database.checklistDao().deleteById(id)
     }
 
     suspend fun markReminderDone(id: String) = DataOperationCoordinator.withExclusive {
+        DataOperationCoordinator.requireUserSessionUnlocked()
         database.reminderDao().markDone(id)
     }
 
-    private suspend fun enqueueOcr(id: String) {
+    suspend fun reconcileQueuedOcr() {
+        DataOperationCoordinator.withExclusiveDuringStartup {
+            database.documentDao().getByProcessingState(ProcessingState.QUEUED)
+                .take(LibraryLimits.MAX_DOCUMENTS)
+                .forEach { document ->
+                    if (!enqueueOcr(document.id)) {
+                        database.documentDao().update(
+                            document.copy(processingError = "Η επεξεργασία OCR θα επαναληφθεί αυτόματα.")
+                        )
+                    }
+                }
+        }
+    }
+
+    private suspend fun enqueueOcr(id: String): Boolean = runCatching {
         val request = OneTimeWorkRequestBuilder<OcrWorker>()
             .setInputData(workDataOf(OcrWorker.KEY_DOCUMENT_ID to id))
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, java.util.concurrent.TimeUnit.SECONDS)
             .addTag("document-processing")
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork("ocr_$id", ExistingWorkPolicy.REPLACE, request)
-    }
+    }.isSuccess
 
     private fun countEncryptedSourcePages(encrypted: File, mime: String, name: String): Int {
         if (!mime.equals("application/pdf", true) && !name.endsWith(".pdf", true)) return 1
@@ -378,7 +463,7 @@ class FolderRepository(private val context: Context) {
         return try {
             FileCrypto.decryptToTemp(encrypted, temp)
             ParcelFileDescriptor.open(temp, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
-                PdfRenderer(descriptor).use { it.pageCount.coerceAtLeast(1).also { count -> require(count <= MAX_LOGICAL_PAGES) { "Το PDF περιέχει υπερβολικά πολλές σελίδες." } } }
+                PdfRenderer(descriptor).use { it.pageCount.coerceAtLeast(1).also { count -> LibraryLimits.requireLogicalPagesPerDocument(count) } }
             }
         } finally {
             temp.delete()
@@ -392,8 +477,18 @@ class FolderRepository(private val context: Context) {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(temp.absolutePath, bounds)
             require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Η εικόνα «$name» δεν αποκωδικοποιείται." }
-            val bitmap = BitmapFactory.decodeFile(temp.absolutePath)
-                ?: error("Η εικόνα «$name» δεν αποκωδικοποιείται.")
+            require(bounds.outWidth <= MAX_IMAGE_SIDE && bounds.outHeight <= MAX_IMAGE_SIDE) {
+                "Η εικόνα «$name» έχει υπερβολική ανάλυση."
+            }
+            require(bounds.outWidth.toLong() * bounds.outHeight <= MAX_IMAGE_PIXELS) {
+                "Η εικόνα «$name» είναι υπερβολικά μεγάλη."
+            }
+            var sample = 1
+            while (maxOf(bounds.outWidth / sample, bounds.outHeight / sample) > IMAGE_VALIDATION_SIDE) sample *= 2
+            val bitmap = BitmapFactory.decodeFile(temp.absolutePath, BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+            }) ?: error("Η εικόνα «$name» δεν αποκωδικοποιείται.")
             bitmap.recycle()
         } finally {
             temp.delete()
@@ -426,17 +521,17 @@ class FolderRepository(private val context: Context) {
 
     private suspend fun currentStorageBytes(): Long {
         val paths = buildSet {
-            database.documentDao().getAll().forEach { add(it.encryptedPath) }
-            database.documentPageDao().getAll().forEach { add(it.encryptedPath) }
+            database.documentDao().getAllEncryptedPaths().forEach(::add)
+            database.documentPageDao().getAllEncryptedPaths().forEach(::add)
         }
         return paths.sumOf { path -> File(path).takeIf { it.isFile }?.length() ?: 0L }
     }
 
     private companion object {
-        const val MAX_IMPORT_SOURCES = 100
         const val MAX_DOCUMENT_BYTES = 512L * 1024 * 1024
         const val MAX_TOTAL_STORAGE_BYTES = 2L * 1024 * 1024 * 1024
-        const val MAX_DOCUMENTS = 5_000
-        const val MAX_LOGICAL_PAGES = 1_000
+        const val MAX_IMAGE_SIDE = 12_000
+        const val MAX_IMAGE_PIXELS = 50_000_000L
+        const val IMAGE_VALIDATION_SIDE = 3_200
     }
 }

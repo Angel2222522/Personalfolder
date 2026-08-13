@@ -10,18 +10,25 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 class TesseractOcrEngine(private val context: Context) {
+    private var tess: TessBaseAPI? = null
+
     suspend fun recognize(bitmap: Bitmap): String = withContext(Dispatchers.Default) {
-        val dataPath = withContext(Dispatchers.IO) { prepareDataPath() }
-        val tess = TessBaseAPI()
-        try {
-            check(tess.init(dataPath.absolutePath, "ell+eng")) {
+        val engine = tess ?: TessBaseAPI().also { created ->
+            val dataPath = withContext(Dispatchers.IO) { prepareDataPath() }
+            check(created.init(dataPath.absolutePath, "ell+eng")) {
+                created.recycle()
                 "Δεν φορτώθηκαν τα ελληνικά/αγγλικά δεδομένα OCR."
             }
-            tess.setImage(bitmap)
-            tess.getUTF8Text().orEmpty().trim()
-        } finally {
-            tess.recycle()
+            tess = created
         }
+        engine.setImage(bitmap)
+        engine.getUTF8Text().orEmpty().trim()
+    }
+
+    /** Releases the native OCR engine after one document/job finishes. */
+    fun close() {
+        tess?.recycle()
+        tess = null
     }
 
     private suspend fun prepareDataPath(): File = modelLock.withLock {

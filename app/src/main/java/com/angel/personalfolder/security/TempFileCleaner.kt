@@ -23,16 +23,42 @@ object TempFileCleaner {
         )
         directories.forEach { (directory, maxAge) ->
             directory.listFiles().orEmpty().forEach { file ->
-                if (now - file.lastModified() > maxAge) FileCrypto.deleteRecursively(file)
+                if (isStale(file, now, maxAge)) FileCrypto.deleteRecursively(file)
             }
         }
         context.cacheDir.listFiles().orEmpty()
             .filter { it.name.endsWith(".tmp") || it.name.endsWith(".part") }
-            .filter { now - it.lastModified() > MAX_TEMP_AGE_MS }
+            .filter { isStale(it, now, MAX_TEMP_AGE_MS) }
             .forEach(FileCrypto::deleteRecursively)
-        // Restore and deletion recovery directories are journal-owned. They
-        // must not be removed by a time-based cleaner while recovery is still
-        // possible after process death.
+        // The journaled roots are handled by their recovery protocols. Once
+        // those journals are absent, unjournaled staging trees are orphaned
+        // and may be removed even when the device clock moved forward or
+        // backward between process runs.
+        val restoreJournal = context.filesDir.resolve("restore_journal.json")
+        val deletionJournal = context.filesDir.resolve("document_delete_journal.json")
+        if (!restoreJournal.isFile) {
+            context.cacheDir.listFiles().orEmpty()
+                .filter { it.name.startsWith("restore_documents_") || it.name.startsWith("previous_documents_") }
+                .filter { isStale(it, now, MAX_TEMP_AGE_MS) }
+                .forEach(FileCrypto::deleteRecursively)
+        }
+        if (!deletionJournal.isFile) {
+            context.cacheDir.resolve("deleted_documents").listFiles().orEmpty()
+                .filter { isStale(it, now, MAX_TEMP_AGE_MS) }
+                .forEach(FileCrypto::deleteRecursively)
+        }
     }
 
+    private fun isStale(file: File, now: Long, maxAge: Long): Boolean {
+        val modified = file.lastModified()
+        if (modified <= 0L) return true
+        // Startup cleanup runs while the normal operation gate is closed, so
+        // a timestamp far in the future cannot belong to a live operation.
+        // Treating it as stale prevents a backwards clock change from
+        // keeping orphan plaintext/staging data indefinitely.
+        if (modified > now + CLOCK_SKEW_TOLERANCE_MS) return true
+        return now >= modified && now - modified >= maxAge
+    }
+
+    private const val CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000L
 }

@@ -5,12 +5,15 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.angel.personalfolder.data.AppDatabase
 import com.angel.personalfolder.processing.DocumentProcessor
-import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicInteger
 
 class OcrWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
-        processingLock.lock()
+        activeWorkers.incrementAndGet()
+        idle.value = false
         return try {
             val id = inputData.getString(KEY_DOCUMENT_ID) ?: return Result.failure()
             val result = DocumentProcessor(applicationContext, AppDatabase.get(applicationContext)).process(id)
@@ -20,16 +23,15 @@ class OcrWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker
                 else -> Result.failure()
             }
         } finally {
-            processingLock.unlock()
+            if (activeWorkers.decrementAndGet() == 0) idle.value = true
         }
     }
 
     companion object {
         const val KEY_DOCUMENT_ID = "document_id"
-        private val processingLock = Mutex()
-        suspend fun awaitIdle() {
-            processingLock.lock()
-            processingLock.unlock()
-        }
+        private val activeWorkers = AtomicInteger(0)
+        private val idle = MutableStateFlow(true)
+
+        suspend fun awaitIdle() = idle.first { it }
     }
 }

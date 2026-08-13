@@ -7,6 +7,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DataOperationCoordinatorTest {
@@ -45,10 +46,29 @@ class DataOperationCoordinatorTest {
             }
             delay(20)
             assertFalse(entered.isCompleted)
-            DataOperationCoordinator.completeStartupRecovery()
+            DataOperationCoordinator.completeStartupRecovery(success = true)
             operation.await()
         } finally {
-            DataOperationCoordinator.completeStartupRecovery()
+            DataOperationCoordinator.completeStartupRecovery(success = true)
+        }
+    }
+
+    @Test
+    fun failedStartupRecoveryBlocksNewMutations() = runTest {
+        DataOperationCoordinator.beginStartupRecovery()
+        DataOperationCoordinator.completeStartupRecovery(false, "δοκιμασμένη αποτυχία")
+        try {
+            var blocked = false
+            try {
+                DataOperationCoordinator.withExclusive { Unit }
+            } catch (_: DataOperationCoordinator.RecoveryBlockedException) {
+                blocked = true
+            }
+            assertTrue(blocked)
+            assertEquals(DataOperationCoordinator.StartupRecoveryState.BLOCKED, DataOperationCoordinator.recoveryState.value)
+            assertEquals("δοκιμασμένη αποτυχία", DataOperationCoordinator.recoveryMessage())
+        } finally {
+            DataOperationCoordinator.completeStartupRecovery(true)
         }
     }
 }

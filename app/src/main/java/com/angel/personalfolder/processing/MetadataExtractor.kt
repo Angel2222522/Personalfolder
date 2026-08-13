@@ -74,7 +74,7 @@ object MetadataExtractor {
 
         val providerCandidate = lines.mapIndexedNotNull { index, line ->
             providerScore(line)?.let { score -> ProviderCandidate(line.take(120), score, index) }
-        }.maxWithOrNull(compareBy<ProviderCandidate> { it.score }.thenByDescending { it.value.length }.thenBy { it.index })
+        }.maxWithOrNull(compareBy<ProviderCandidate> { it.score }.thenByDescending { it.value.length }.thenByDescending { it.index })
         val provider = providerCandidate?.value.orEmpty()
         val providerConfidence = when {
             providerCandidate == null -> MetadataConfidence.UNKNOWN
@@ -181,8 +181,7 @@ object MetadataExtractor {
 
     private fun providerScore(line: String): Int? {
         val value = foldGreek(line)
-        if (value.contains("ελληνικη δημοκρατια") || value == "δημοκρατια") return 1
-        var score = 0
+        var score = if (value.contains("ελληνικη δημοκρατια") || value == "δημοκρατια") 1 else 0
         if (listOf("υπουργειο", "ministry").any(value::contains)) score += 5
         if (listOf("διευθυνση", "υπηρεσια", "γενικη γραμματεια", "directorate").any(value::contains)) score += 4
         if (listOf("δημος", "ααδε", "εφκα", "οργανισμος", "νοσοκομειο").any(value::contains)) score += 3

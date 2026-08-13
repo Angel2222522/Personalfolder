@@ -23,32 +23,54 @@ data class LogicalDocumentPage(
 class DocumentRenderService(private val context: Context) {
     private val database = AppDatabase.get(context)
 
-    suspend fun logicalPages(document: DocumentEntity): List<LogicalDocumentPage> = withContext(Dispatchers.IO) {
-        val result = mutableListOf<LogicalDocumentPage>()
-        sources(document).forEach { source ->
+    suspend fun logicalPages(document: DocumentEntity, lockDocument: Boolean = true): List<LogicalDocumentPage> {
+        val read = suspend {
+            withContext(Dispatchers.IO) {
+            val result = mutableListOf<LogicalDocumentPage>()
+            sources(document).forEach { source ->
             val count = withDecryptedSource(source) { file -> countPages(file, source.mimeType, source.sourceFileName, document) }
             require(result.size + count <= MAX_LOGICAL_PAGES) { "Το έγγραφο περιέχει υπερβολικά πολλές σελίδες." }
             repeat(count) { sourcePage ->
                 result += LogicalDocumentPage(result.size, source, sourcePage)
             }
+            }
+            result
+            }
         }
-        result
+        return if (lockDocument) {
+            DataOperationCoordinator.withDocumentExclusive(document.id) { read() }
+        } else {
+            read()
+        }
     }
 
     suspend fun pageCount(document: DocumentEntity): Int = logicalPages(document).size
 
-    suspend fun renderPage(document: DocumentEntity, logicalPage: LogicalDocumentPage, maxDimension: Int = 1800): Bitmap =
-        withContext(Dispatchers.IO) {
-            withDecryptedSource(logicalPage.source) { file ->
-                renderSourcePage(
-                    file = file,
-                    source = logicalPage.source,
-                    sourcePageIndex = logicalPage.sourcePageIndex,
-                    document = document,
-                    maxDimension = maxDimension
-                )
+    suspend fun renderPage(
+        document: DocumentEntity,
+        logicalPage: LogicalDocumentPage,
+        maxDimension: Int = 1800,
+        lockDocument: Boolean = true
+    ): Bitmap {
+        val render = suspend {
+            withContext(Dispatchers.IO) {
+                withDecryptedSource(logicalPage.source) { file ->
+                    renderSourcePage(
+                        file = file,
+                        source = logicalPage.source,
+                        sourcePageIndex = logicalPage.sourcePageIndex,
+                        document = document,
+                        maxDimension = maxDimension
+                    )
+                }
             }
         }
+        return if (lockDocument) {
+            DataOperationCoordinator.withDocumentExclusive(document.id) { render() }
+        } else {
+            render()
+        }
+    }
 
     private suspend fun <T> withDecryptedSource(source: DocumentPageEntity, block: (File) -> T): T {
         val encrypted = File(source.encryptedPath)
@@ -114,6 +136,8 @@ class DocumentRenderService(private val context: Context) {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.absolutePath, bounds)
         require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Δεν ήταν δυνατή η ανάγνωση της εικόνας." }
+        require(bounds.outWidth <= MAX_IMAGE_SIDE && bounds.outHeight <= MAX_IMAGE_SIDE) { "Η εικόνα έχει υπερβολική ανάλυση." }
+        require(bounds.outWidth.toLong() * bounds.outHeight <= MAX_IMAGE_PIXELS) { "Η εικόνα είναι υπερβολικά μεγάλη." }
         var sample = 1
         while (max(bounds.outWidth / sample, bounds.outHeight / sample) > maxDimension * 2) sample *= 2
         val options = BitmapFactory.Options().apply {
@@ -140,5 +164,9 @@ class DocumentRenderService(private val context: Context) {
         return candidate == root || candidate.toPath().startsWith(root.toPath())
     }
 
-    private companion object { const val MAX_LOGICAL_PAGES = 1_000 }
+    private companion object {
+        const val MAX_LOGICAL_PAGES = LibraryLimits.MAX_LOGICAL_PAGES_PER_DOCUMENT
+        const val MAX_IMAGE_SIDE = 12_000
+        const val MAX_IMAGE_PIXELS = 50_000_000L
+    }
 }
