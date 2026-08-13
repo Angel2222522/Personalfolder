@@ -27,6 +27,7 @@ import com.angel.personalfolder.security.PendingActivityStateStore
 import com.angel.personalfolder.ui.FolderApp
 import com.angel.personalfolder.ui.FolderViewModel
 import com.angel.personalfolder.ui.PersonalFolderTheme
+import com.angel.personalfolder.ui.ScreenshotPrivacyShell
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -40,6 +41,7 @@ class MainActivity : FragmentActivity() {
     private var cameraUri: Uri? = null
     private var sessionUnlocked by mutableStateOf(false)
     private var lockEnabled by mutableStateOf(false)
+    private var screenshotsAllowed by mutableStateOf(false)
     private var lockPromptVisible = false
     private var pendingBackupPassword: String? = null
     private var pendingExportDocumentIds: List<String> = emptyList()
@@ -108,7 +110,6 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         restorePendingState(savedInstanceState)
         if (savedInstanceState == null) {
             pendingExportDocumentIds = PendingActivityStateStore.peekList(this, STATE_EXPORT_IDS)
@@ -116,6 +117,8 @@ class MainActivity : FragmentActivity() {
             pendingIncomingUris = PendingActivityStateStore.peekList(this, STATE_INCOMING_URIS).map(Uri::parse)
         }
         lockEnabled = settings.getBoolean(KEY_LOCK, false)
+        screenshotsAllowed = settings.getBoolean(KEY_SCREENSHOTS_ALLOWED, false)
+        applyScreenCapturePolicy()
         if (lockEnabled && !canAuthenticate()) {
             // An already-enabled lock must fail closed. Do not silently weaken the
             // persisted policy when a credential is temporarily unavailable.
@@ -124,52 +127,80 @@ class MainActivity : FragmentActivity() {
         if (savedInstanceState == null) handleIncomingIntent(intent)
         setContent {
             PersonalFolderTheme {
-                FolderApp(
-                    viewModel = viewModel,
-                    onImport = { documentPicker.launch(arrayOf("application/pdf", "image/*")) },
-                    onCamera = ::takePhoto,
-                    onOpenDocument = ::openDocument,
-                    onShareDocument = ::shareDocument,
-                    onEnableLock = { authenticate(
-                        onSuccess = { settings.edit().putBoolean(KEY_LOCK, true).apply(); lockEnabled = true; sessionUnlocked = true },
-                        onFailure = ::showAuthMessage
-                    ) },
-                    onDisableLock = { authenticate(
-                        onSuccess = { settings.edit().putBoolean(KEY_LOCK, false).apply(); lockEnabled = false; sessionUnlocked = true },
-                        onFailure = ::showAuthMessage
-                    ) },
-                    onCreateBackup = { password -> pendingBackupPassword = password; PendingActivityStateStore.savePassword(this, password); backupCreator.launch("personal-folder-backup.pfb") },
-                    onRestoreBackup = { password -> pendingBackupPassword = password; PendingActivityStateStore.savePassword(this, password); backupPicker.launch(arrayOf("application/octet-stream", "application/zip", "*/*")) },
-                    onRequestNotifications = ::requestNotificationPermission,
-                    onExportDocuments = { documentIds -> pendingExportDocumentIds = documentIds; PendingActivityStateStore.saveList(this, STATE_EXPORT_IDS, documentIds); exportCreator.launch("personal-folder-export.zip") },
-                    onExportPdf = { documentIds -> pendingPdfDocumentIds = documentIds; PendingActivityStateStore.saveList(this, STATE_PDF_IDS, documentIds); pdfExportCreator.launch("personal-folder-export.pdf") },
-                    scannerOpen = scannerOpen,
-                    scannerPageUris = scannerFiles.map { FileProvider.getUriForFile(this, "$packageName.fileprovider", it) },
-                    onScannerAddPage = { launchCamera() },
-                    onScannerRetryLast = ::retryLastScanPage,
-                    onScannerFinish = ::finishScanner,
-                    onScannerCancel = ::cancelScanner,
-                    lockEnabled = lockEnabled,
-                    locked = lockEnabled && !sessionUnlocked
-                )
+                ScreenshotPrivacyShell(
+                    screenshotsAllowed = screenshotsAllowed,
+                    locked = lockEnabled && !sessionUnlocked,
+                    onScreenshotsAllowedChange = ::setScreenshotsAllowed
+                ) {
+                    FolderApp(
+                        viewModel = viewModel,
+                        onImport = { documentPicker.launch(arrayOf("application/pdf", "image/*")) },
+                        onCamera = ::takePhoto,
+                        onOpenDocument = ::openDocument,
+                        onShareDocument = ::shareDocument,
+                        onEnableLock = { authenticate(
+                            onSuccess = {
+                                settings.edit().putBoolean(KEY_LOCK, true).apply()
+                                lockEnabled = true
+                                sessionUnlocked = true
+                                applyScreenCapturePolicy()
+                            },
+                            onFailure = ::showAuthMessage
+                        ) },
+                        onDisableLock = { authenticate(
+                            onSuccess = {
+                                settings.edit().putBoolean(KEY_LOCK, false).apply()
+                                lockEnabled = false
+                                sessionUnlocked = true
+                                applyScreenCapturePolicy()
+                            },
+                            onFailure = ::showAuthMessage
+                        ) },
+                        onCreateBackup = { password -> pendingBackupPassword = password; PendingActivityStateStore.savePassword(this, password); backupCreator.launch("personal-folder-backup.pfb") },
+                        onRestoreBackup = { password -> pendingBackupPassword = password; PendingActivityStateStore.savePassword(this, password); backupPicker.launch(arrayOf("application/octet-stream", "application/zip", "*/*")) },
+                        onRequestNotifications = ::requestNotificationPermission,
+                        onExportDocuments = { documentIds -> pendingExportDocumentIds = documentIds; PendingActivityStateStore.saveList(this, STATE_EXPORT_IDS, documentIds); exportCreator.launch("personal-folder-export.zip") },
+                        onExportPdf = { documentIds -> pendingPdfDocumentIds = documentIds; PendingActivityStateStore.saveList(this, STATE_PDF_IDS, documentIds); pdfExportCreator.launch("personal-folder-export.pdf") },
+                        scannerOpen = scannerOpen,
+                        scannerPageUris = scannerFiles.map { FileProvider.getUriForFile(this, "$packageName.fileprovider", it) },
+                        onScannerAddPage = { launchCamera() },
+                        onScannerRetryLast = ::retryLastScanPage,
+                        onScannerFinish = ::finishScanner,
+                        onScannerCancel = ::cancelScanner,
+                        lockEnabled = lockEnabled,
+                        locked = lockEnabled && !sessionUnlocked
+                    )
+                }
             }
         }
     }
 
     override fun onResume() {
         super.onResume()
+        applyScreenCapturePolicy()
         lifecycleScope.launch { ReminderScheduler.rescheduleAll(this@MainActivity) }
         if (lockEnabled && !canAuthenticate()) {
             sessionUnlocked = false
+            applyScreenCapturePolicy()
             showAuthMessage("Το κλείδωμα παραμένει ενεργό. Ενεργοποίησε ξανά μια ασφαλή συσκευή ταυτοποίησης για να ξεκλειδώσεις.")
         } else if (lockEnabled && !sessionUnlocked && !lockPromptVisible) {
-            authenticate(onSuccess = { sessionUnlocked = true; flushPendingIncoming() }, onFailure = ::showAuthMessage)
+            authenticate(
+                onSuccess = {
+                    sessionUnlocked = true
+                    applyScreenCapturePolicy()
+                    flushPendingIncoming()
+                },
+                onFailure = ::showAuthMessage
+            )
         }
     }
 
     override fun onStop() {
-        super.onStop()
+        // Always protect the task preview/background frame, even when the user
+        // allows screenshots while actively using the unlocked application.
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         sessionUnlocked = false
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -186,6 +217,21 @@ class MainActivity : FragmentActivity() {
         outState.putStringArrayList(KEY_SCANNER_FILES, ArrayList(scannerFiles.map(File::getAbsolutePath)))
         outState.putBoolean(KEY_SCANNER_OPEN, scannerOpen)
         super.onSaveInstanceState(outState)
+    }
+
+    private fun setScreenshotsAllowed(allowed: Boolean) {
+        settings.edit().putBoolean(KEY_SCREENSHOTS_ALLOWED, allowed).apply()
+        screenshotsAllowed = allowed
+        applyScreenCapturePolicy()
+    }
+
+    private fun applyScreenCapturePolicy() {
+        val mustRemainSecure = !screenshotsAllowed || (lockEnabled && !sessionUnlocked)
+        if (mustRemainSecure) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
     }
 
     private fun takePhoto() {
@@ -360,6 +406,7 @@ class MainActivity : FragmentActivity() {
 
     companion object {
         private const val KEY_LOCK = "biometric_lock"
+        private const val KEY_SCREENSHOTS_ALLOWED = "screenshots_allowed"
         private const val MAX_INCOMING_URIS = 100
         private const val MAX_PENDING_INCOMING_URIS = 100
         private const val KEY_PENDING_EXPORT_IDS = "pending_export_ids"
