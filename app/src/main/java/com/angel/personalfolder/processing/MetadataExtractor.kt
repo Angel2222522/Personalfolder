@@ -47,6 +47,10 @@ object MetadataExtractor {
         """\s+(?:με|που|όπου|όπως|για)\s+|[,;|]""",
         RegexOption.IGNORE_CASE
     )
+    private val documentTypeLabelRegex = Regex(
+        """^(?:ΕΙΔΟΣ\s+ΠΑΡΑΣΤΑΤΙΚΟΥ|ΤΥΠΟΣ\s+ΕΓΓΡΑΦΟΥ|DOCUMENT\s+TYPE)\s*[:\-]\s*(.+)$""",
+        RegexOption.IGNORE_CASE
+    )
 
     private val categoryRules = listOf(
         CategoryRule("Ταυτότητα / προσωπικά", listOf("διαβατήριο", "ταυτότητα", "passport", "personal number", "προσωπικός αριθμός", "άδεια οδήγησης")),
@@ -124,19 +128,8 @@ object MetadataExtractor {
         "expiration"
     )
 
-    /**
-     * supplementalText is secondary OCR evidence (for example a sparse-layout
-     * pass). It can help title/provider/date/protocol extraction, but category
-     * scoring intentionally stays on the primary visible OCR text so duplicate
-     * helper text cannot inflate or distort classification.
-     */
     fun extract(text: String, fallbackTitle: String, supplementalText: String = ""): ExtractedMetadata {
         val primaryText = text.replace("\u0000", " ").trim()
-
-        // Metadata describes the document itself, not every attachment that may
-        // be concatenated behind it. Bound extraction to the leading evidence so
-        // a long dossier cannot inherit a category, protocol or date from a late
-        // supporting document. The full OCR body remains stored/searchable.
         val metadataPrimaryText = primaryText.take(MAX_METADATA_EVIDENCE_CHARS)
         val metadataSupplementalText = supplementalText.replace("\u0000", " ").trim().take(MAX_METADATA_EVIDENCE_CHARS)
         val evidenceText = buildString {
@@ -148,12 +141,9 @@ object MetadataExtractor {
         }
         val lines = evidenceText.lines().map(String::trim).filter { it.length >= 3 }
 
-        // Do not assume that the first OCR line is the document title. Greek
-        // official documents commonly start with state/ministerial hierarchy.
-        // Prefer an actual document-type heading; if OCR missed it, a meaningful
-        // filename-derived fallback is safer than promoting "Ελληνική Δημοκρατία".
         val titleCandidate = lines.mapIndexedNotNull { index, line ->
-            titleScore(line, index)?.let { score -> TitleCandidate(line.take(100), score, index) }
+            val candidateValue = extractSpecificTitle(line)
+            titleScore(candidateValue, index)?.let { score -> TitleCandidate(candidateValue.take(100), score, index) }
         }.maxWithOrNull(compareBy<TitleCandidate> { it.score }.thenBy { -it.index })
         val fallbackTitleScore = titleScore(fallbackTitle, 0)
         val title = titleCandidate?.value
@@ -197,11 +187,7 @@ object MetadataExtractor {
 
         val dateMatches = dateRegex.findAll(evidenceText).mapNotNull { match ->
             normalizeDate(match.value)?.let { canonical ->
-                DateMatch(
-                    canonical = canonical,
-                    range = match.range,
-                    labelContext = labelContextBeforeDate(evidenceText, match.range)
-                )
+                DateMatch(canonical = canonical, range = match.range, labelContext = labelContextBeforeDate(evidenceText, match.range))
             }
         }.toList()
         val dateCandidates = dateMatches.map { match ->
@@ -219,17 +205,11 @@ object MetadataExtractor {
             )
         }
 
-        val issuedCandidate = dateCandidates
-            .filter { it.issuedScore > 0 }
+        val issuedCandidate = dateCandidates.filter { it.issuedScore > 0 }
             .maxWithOrNull(compareBy<DateCandidate> { it.issuedScore }.thenBy { -it.match.range.first })
-        val expiryCandidate = dateCandidates
-            .filter { it.expiryScore > 0 }
+        val expiryCandidate = dateCandidates.filter { it.expiryScore > 0 }
             .maxWithOrNull(compareBy<DateCandidate> { it.expiryScore }.thenBy { it.match.range.first })
 
-        // Dates are metadata only when evidence belongs to that concrete OCR
-        // date. A standard official dateline such as "Θεσσαλονίκη: 11-08-2026"
-        // counts as medium-confidence issue-date evidence. It never creates an
-        // expiry date, and unrelated/unlabelled dates are still ignored.
         val issued = issuedCandidate?.match?.canonical
         val expiry = expiryCandidate?.match?.canonical
         val issuedConfidence = when {
@@ -245,9 +225,6 @@ object MetadataExtractor {
         val issuedProvenance = issuedCandidate?.let { "issued-${it.issuedSource}:${it.issuedScore}" } ?: "none"
         val expiryProvenance = expiryCandidate?.let { "expiry-keyword:${it.expiryScore}" } ?: "none"
 
-        // Protocol values are matched against the original bounded evidence so
-        // their Greek letters/case are preserved. Late supporting attachments are
-        // deliberately outside this scope.
         val protocolMatch = protocolRegex.find(evidenceText)
         val protocol = protocolMatch?.groupValues?.getOrNull(1)?.let(::normalizeProtocol)
         val protocolConfidence = if (protocol == null) MetadataConfidence.NONE else MetadataConfidence.HIGH
@@ -301,6 +278,18 @@ object MetadataExtractor {
         )
     }
 
+    private fun extractSpecificTitle(line: String): String {
+        documentTypeLabelRegex.find(line)?.groupValues?.getOrNull(1)?.trim()?.takeIf(String::isNotBlank)?.let { return it }
+        val pipeParts = line.split('|').map(String::trim).filter(String::isNotBlank)
+        if (pipeParts.size > 1 && containsDocumentTitleMarker(pipeParts.first())) return pipeParts.first()
+        return line
+    }
+
+    private fun containsDocumentTitleMarker(value: String): Boolean {
+        val folded = foldGreek(value)
+        return STRONG_TITLE_TERMS.any(folded::contains) || GENERIC_TITLE_TERMS.any(folded::contains)
+    }
+
     private fun extractSpecificProvider(line: String): String {
         val anchor = schoolProviderAnchor.find(line) ?: return line
         val candidate = line.substring(anchor.range.first)
@@ -312,29 +301,12 @@ object MetadataExtractor {
         val value = foldGreek(line)
         if (value.isBlank()) return null
         var score = 0
-        if (listOf(
-                "βεβαιωση σπουδων",
-                "βεβαιωση φοιτησης",
-                "πιστοποιητικο σπουδων",
-                "residence permit",
-                "residence card"
-            ).any(value::contains)
-        ) {
-            score += 12
-        } else if (listOf(
-                "βεβαιωση",
-                "πιστοποιητικο",
-                "αδεια",
-                "αποφαση",
-                "αιτηση",
-                "συμβαση",
-                "γνωματευση",
-                "certificate",
-                "permit"
-            ).any(value::contains)
-        ) {
-            score += 6
+        when {
+            STRONG_TITLE_TERMS.any(value::contains) -> score += 12
+            GENERIC_TITLE_TERMS.any(value::contains) -> score += 6
         }
+        if (value == "αποφαση" || value == "αιτηση - αναφορα" || value == "αιτηση-αναφορα") score += 8
+        if (TITLE_METADATA_NOISE.any(value::contains)) score -= 8
         if (listOf(
                 "ελληνικη δημοκρατια",
                 "hellenic republic",
@@ -343,9 +315,7 @@ object MetadataExtractor {
                 "περιφερειακη διευθυνση",
                 "γενικη γραμματεια"
             ).any(value::contains)
-        ) {
-            score -= 10
-        }
+        ) score -= 10
         if (line.length in 5..80) score += 1
         if (index < 30) score += 1
         return score.takeIf { it >= MIN_TITLE_SCORE }
@@ -355,9 +325,6 @@ object MetadataExtractor {
         val value = foldGreek(line)
         if (value.contains("ελληνικη δημοκρατια") || value == "δημοκρατια") return 1
         var score = 0
-        // Prefer the concrete issuing institution over a generic parent heading.
-        // This prevents a school certificate from being attributed merely to the
-        // ministry when the school itself is present in OCR text.
         if (listOf("γυμνασιο", "λυκειο", "σχολειο", "πανεπιστημιο", "university", "school").any(value::contains)) score += 7
         if (listOf("υπουργειο", "ministry").any(value::contains)) score += 5
         if (listOf("διευθυνση", "υπηρεσια", "γενικη γραμματεια", "directorate").any(value::contains)) score += 4
@@ -381,38 +348,19 @@ object MetadataExtractor {
         val folded = foldGreek(value).trim().trimEnd(':', ',')
         if (folded.isBlank()) return 0
         if (listOf(
-                "ληξη",
-                "εκδοση",
-                "δημιουργ",
-                "γεννη",
-                "πρωτ",
-                "μητρω",
-                "προθεσ",
-                "valid",
-                "expiry",
-                "issued",
-                "created"
+                "ληξη", "εκδοση", "δημιουργ", "γεννη", "πρωτ", "μητρω", "προθεσ",
+                "valid", "expiry", "issued", "created"
             ).any(folded::contains)
         ) return 0
         val words = folded.split(Regex("""\s+""")).filter(String::isNotBlank)
         return if (words.size in 1..4) DATELINE_SCORE else 0
     }
 
-    /**
-     * A label belongs to the date that follows it. For multiple dates on one
-     * OCR line, only the text since the previous date is considered, so
-     * "Δημιουργία: 01/01/2024 | Λήξη: 01/01/2025" maps each label correctly.
-     * If the date starts its line, a label-only previous line is also accepted.
-     */
     private fun labelContextBeforeDate(text: String, range: IntRange): String {
         val lineStart = text.lastIndexOf('\n', (range.first - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
         val linePrefix = text.substring(lineStart, range.first)
         val previousDate = dateRegex.findAll(linePrefix).lastOrNull()
-        val localPrefix = if (previousDate == null) {
-            linePrefix
-        } else {
-            linePrefix.substring(previousDate.range.last + 1)
-        }
+        val localPrefix = if (previousDate == null) linePrefix else linePrefix.substring(previousDate.range.last + 1)
         if (localPrefix.any(Char::isLetterOrDigit)) return localPrefix.takeLast(LABEL_CONTEXT_LIMIT)
         if (lineStart == 0) return localPrefix.takeLast(LABEL_CONTEXT_LIMIT)
 
@@ -477,11 +425,30 @@ object MetadataExtractor {
     private data class TitleCandidate(val value: String, val score: Int, val index: Int)
     private data class ProviderCandidate(val value: String, val score: Int, val index: Int)
     private data class DateMatch(val canonical: String, val range: IntRange, val labelContext: String)
-    private data class DateCandidate(
-        val match: DateMatch,
-        val issuedScore: Int,
-        val issuedSource: String,
-        val expiryScore: Int
+    private data class DateCandidate(val match: DateMatch, val issuedScore: Int, val issuedSource: String, val expiryScore: Int)
+
+    private val STRONG_TITLE_TERMS = listOf(
+        "βεβαιωση σπουδων",
+        "βεβαιωση φοιτησης",
+        "ιατρικη βεβαιωση",
+        "πιστοποιητικο σπουδων",
+        "ληξιαρχικη πραξη γεννησης",
+        "δελτιο παραγγελιας",
+        "καθημερινος λογαριασμος",
+        "τραπεζικος λογαριασμος",
+        "account statement",
+        "bank statement",
+        "e-statement",
+        "residence permit",
+        "residence card"
+    )
+    private val GENERIC_TITLE_TERMS = listOf(
+        "βεβαιωση", "πιστοποιητικο", "αδεια", "αποφαση", "αιτηση", "συμβαση", "γνωματευση", "παραστατικο",
+        "certificate", "permit", "statement"
+    )
+    private val TITLE_METADATA_NOISE = listOf(
+        "αρ. αδειας", "αρ αδειας", "αριθμος αδειας", "κωδικος εγγραφου", "κωδικος ηλεκτρονικης πληρωμης",
+        "στοιχεια πελατη", "στοιχεια παραστατικου", "στοιχεια πολιτη", "στοιχεια ιατρου", "iban", "δικαιουχοι"
     )
 
     private const val STRONG_TITLE_SCORE = 10

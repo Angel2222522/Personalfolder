@@ -9,7 +9,10 @@ class MetadataLeadingEvidenceRegressionTest {
         val topLevel = buildString {
             appendLine("ΑΙΤΗΣΗ ΓΙΑ ΑΔΕΙΑ ΔΙΑΜΟΝΗΣ")
             appendLine("ΠΡΟΣ ΔΙΕΥΘΥΝΣΗ ΑΛΛΟΔΑΠΩΝ ΚΑΙ ΜΕΤΑΝΑΣΤΕΥΣΗΣ")
-            repeat(140) { appendLine("Αίτημα σχετικό με άδεια διαμονής και διοικητική εξέταση.") }
+            // Keep the synthetic attachment genuinely outside the extractor's
+            // bounded leading-evidence window. The repetition is intentionally
+            // larger than any metadata window used by this regression.
+            repeat(420) { appendLine("Αίτημα σχετικό με άδεια διαμονής και διοικητική εξέταση.") }
         }
         val lateAttachment = buildString {
             repeat(400) { appendLine("Μισθωτήριο κατοικίας ενοίκιο μίσθωση μισθωτής.") }
