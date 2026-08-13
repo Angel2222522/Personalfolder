@@ -88,12 +88,26 @@ object MetadataEvidenceRefiner {
         val providerConfidence = if (registryQualifier != null) MetadataConfidence.HIGH else metadata.providerConfidence
         val providerProvenance = if (registryQualifier != null) "registry-office-layout" else metadata.providerProvenance
 
+        // A civil-registry birth record is identity/personal documentation, not
+        // merely a generic public-service document. Require both an explicit
+        // birth-record title and a registry issuer so unrelated mentions do not
+        // get promoted.
+        val civilRegistryRecord = shouldPromotePersonalCivilRegistryCategory(metadata.title, provider)
+
         // A bank account statement is financial, not a utility bill merely
         // because its title contains the generic word "λογαριασμός". Require a
         // bank issuer plus account/statement evidence before promoting it.
         val financialAccountStatement = shouldPromoteFinancialAccountCategory(provider, metadata.title, evidence)
-        val category = if (financialAccountStatement) "Οικονομικά" else metadata.category
-        val categoryConfidence = if (financialAccountStatement) MetadataConfidence.HIGH else metadata.categoryConfidence
+        val category = when {
+            civilRegistryRecord -> "Ταυτότητα / προσωπικά"
+            financialAccountStatement -> "Οικονομικά"
+            else -> metadata.category
+        }
+        val categoryConfidence = if (civilRegistryRecord || financialAccountStatement) {
+            MetadataConfidence.HIGH
+        } else {
+            metadata.categoryConfidence
+        }
 
         val refined = metadata.copy(
             category = category,
@@ -170,6 +184,18 @@ object MetadataEvidenceRefiner {
         val folded = fold(value)
         if (REGISTRY_QUALIFIER_NOISE.any(folded::contains)) return false
         return true
+    }
+
+    private fun shouldPromotePersonalCivilRegistryCategory(title: String, provider: String): Boolean {
+        val foldedTitle = fold(title)
+        val foldedProvider = fold(provider)
+        val birthRecord = listOf(
+            "ληξιαρχικη πραξη γεννησης",
+            "πιστοποιητικο γεννησης",
+            "birth certificate"
+        ).any(foldedTitle::contains)
+        val registryIssuer = foldedProvider.contains("ληξιαρχειο") || foldedProvider.contains("civil registry")
+        return birthRecord && registryIssuer
     }
 
     private fun shouldPromoteFinancialAccountCategory(provider: String, title: String, text: String): Boolean {
