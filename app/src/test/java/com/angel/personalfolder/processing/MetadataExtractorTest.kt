@@ -31,7 +31,7 @@ class MetadataExtractorTest {
             "Έγγραφο"
         )
         assertEquals("Δημόσιες υπηρεσίες", result.category)
-        assertEquals("αβ-123", result.protocolNumber)
+        assertEquals("ΑΒ-123", result.protocolNumber)
         assertTrue(result.json.contains("\\\"δοκιμή\\\""))
     }
 
@@ -126,16 +126,23 @@ class MetadataExtractorTest {
         )
         assertEquals(null, MetadataExtractor.extract(validLabels.first(), "Έγγραφο").protocolNumber)
         assertEquals("12345/2026", MetadataExtractor.extract(validLabels[1], "Έγγραφο").protocolNumber)
-        assertEquals("αβ-123/7", MetadataExtractor.extract(validLabels[2], "Έγγραφο").protocolNumber)
+        assertEquals("ΑΒ-123/7", MetadataExtractor.extract(validLabels[2], "Έγγραφο").protocolNumber)
         assertEquals("991", MetadataExtractor.extract(validLabels[3], "Έγγραφο").protocolNumber)
     }
 
     @Test
     fun acceptsProtocolLabelVariantsOnlyAtTheStartOfTheirLine() {
         assertEquals("12345/2026", MetadataExtractor.extract("Αρ Πρωτ: 12345/2026", "Έγγραφο").protocolNumber)
-        assertEquals("ab-7", MetadataExtractor.extract("Protocol No.: AB-7", "Έγγραφο").protocolNumber)
+        assertEquals("AB-7", MetadataExtractor.extract("Protocol No.: AB-7", "Έγγραφο").protocolNumber)
         assertEquals(null, MetadataExtractor.extract("Σχόλιο: Αριθμός πρωτοκόλλου: 12345", "Έγγραφο").protocolNumber)
         assertEquals(null, MetadataExtractor.extract("application number: 12345", "Έγγραφο").protocolNumber)
+    }
+
+    @Test
+    fun acceptsAbbreviatedProtocolAndOcrWhitespaceAroundSeparators() {
+        val result = MetadataExtractor.extract("Αριθμ. Πρωτ: 321 /Φ.7", "Έγγραφο")
+        assertEquals("321/Φ.7", result.protocolNumber)
+        assertEquals("high", result.protocolConfidence)
     }
 
     @Test
@@ -160,6 +167,60 @@ class MetadataExtractorTest {
         )
         assertEquals("Υπουργείο Παιδείας", result.provider)
         assertTrue(result.providerConfidence == "high" || result.providerConfidence == "medium")
+    }
+
+    @Test
+    fun prefersConcreteSchoolIssuerOverParentMinistry() {
+        val result = MetadataExtractor.extract(
+            "ΕΛΛΗΝΙΚΗ ΔΗΜΟΚΡΑΤΙΑ\nΥΠΟΥΡΓΕΙΟ ΠΑΙΔΕΙΑΣ ΚΑΙ ΑΘΛΗΤΙΣΜΟΥ\n12ο ΓΥΜΝΑΣΙΟ ΔΟΚΙΜΗΣ",
+            "Έγγραφο"
+        )
+        assertEquals("12ο ΓΥΜΝΑΣΙΟ ΔΟΚΙΜΗΣ", result.provider)
+        assertEquals("high", result.providerConfidence)
+    }
+
+    @Test
+    fun prefersActualDocumentHeadingOverGenericGovernmentHeader() {
+        val result = MetadataExtractor.extract(
+            "ΕΑΛΗΝΙΚΗ ΑΗΜΟΚΡΑΤΙΑ\nΥΠΟΥΡΓΕΙΟ ΠΑΙΔΕΙΑΣ\nΒΕΒΑΙΩΣΗ ΣΠΟΥΔΩΝ\nΒεβαιώνεται ότι ο μαθητής...",
+            "scan.pdf"
+        )
+        assertEquals("ΒΕΒΑΙΩΣΗ ΣΠΟΥΔΩΝ", result.title)
+        assertEquals("high", result.titleConfidence)
+    }
+
+    @Test
+    fun officialPlaceDatelineIsIssueDateButNeverExpiry() {
+        val result = MetadataExtractor.extract(
+            "12ο ΓΥΜΝΑΣΙΟ ΔΟΚΙΜΗΣ\nΘεσσαλονίκη: 14-08-2026\nΒΕΒΑΙΩΣΗ ΣΠΟΥΔΩΝ",
+            "Έγγραφο"
+        )
+        assertEquals("2026-08-14", result.issuedDate)
+        assertEquals("medium", result.issuedConfidence)
+        assertTrue(result.issuedProvenance.startsWith("issued-dateline:"))
+        assertEquals(null, result.expiryDate)
+    }
+
+    @Test
+    fun schoolCertificateRegressionKeepsFieldsIndependent() {
+        val result = MetadataExtractor.extract(
+            """
+                ΕΑΛΗΝΙΚΗ ΑΗΜΟΚΡΑΤΙΑ
+                ΥΠΟΥΡΓΕΙΟ ΠΑΙΔΕΙΑΣ ΘΡΗΣΚΕΥΜΑΤΩΝ ΚΑΙ
+                ΑΘΛΗΤΙΣΜΟΥ
+                12ο ΓΥΜΝΑΣΙΟ ΔΟΚΙΜΗΣ
+                Θεσσαλονίκη: 14-08-2026
+                Αριθμ. Πρωτ: 321 /Φ.7
+                ΒΕΒΑΙΩΣΗ ΣΠΟΥΔΩΝ
+                Βεβαιώνεται σύμφωνα με τα στοιχεία του μητρώου της σχολικής μονάδας.
+            """.trimIndent(),
+            "βεβαίωση-σπουδών.pdf"
+        )
+        assertEquals("ΒΕΒΑΙΩΣΗ ΣΠΟΥΔΩΝ", result.title)
+        assertEquals("12ο ΓΥΜΝΑΣΙΟ ΔΟΚΙΜΗΣ", result.provider)
+        assertEquals("2026-08-14", result.issuedDate)
+        assertEquals(null, result.expiryDate)
+        assertEquals("321/Φ.7", result.protocolNumber)
     }
 
     @Test
