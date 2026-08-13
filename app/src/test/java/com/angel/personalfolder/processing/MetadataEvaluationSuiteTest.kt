@@ -115,6 +115,7 @@ class MetadataEvaluationSuiteTest {
         )
 
         assertEquals("Ληξιαρχική Πράξη Γέννησης", result.title)
+        assertEquals("Ταυτότητα / προσωπικά", result.category)
         assertEquals("ΛΗΞΙΑΡΧΕΙΟ ΔΟΚΙΜΑΣΤΙΚΟΥ", result.provider)
         assertEquals("2026-08-04", result.issuedDate)
         assertEquals("2026", result.protocolNumber)
