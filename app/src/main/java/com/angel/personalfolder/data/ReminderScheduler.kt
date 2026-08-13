@@ -15,6 +15,9 @@ object ReminderScheduler {
     private val leadDays = listOf(30, 7, 0)
     const val WORK_TAG = "document-reminders"
 
+    fun shouldScheduleForCase(status: String): Boolean =
+        status != CaseStatus.COMPLETED && status != CaseStatus.ARCHIVED
+
     suspend fun replaceForDocument(context: Context, documentId: String, title: String, expiry: String?) {
         val date = expiry?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
         val database = AppDatabase.get(context)
@@ -47,7 +50,7 @@ object ReminderScheduler {
     suspend fun replaceForCase(context: Context, caseId: String, title: String, deadline: String?) {
         val database = AppDatabase.get(context)
         val caseEntity = withDatabaseCommit(database) { caseDao().getById(caseId) }
-        val date = if (caseEntity != null && CaseReminderPolicy.shouldSchedule(caseEntity.status)) {
+        val date = if (caseEntity != null && shouldScheduleForCase(caseEntity.status)) {
             deadline?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
         } else {
             null
@@ -114,7 +117,7 @@ object ReminderScheduler {
         val database = AppDatabase.get(context)
         val inactiveCaseIds = withDatabaseCommit(database) {
             caseDao().getAll()
-                .filterNot { CaseReminderPolicy.shouldSchedule(it.status) }
+                .filterNot { shouldScheduleForCase(it.status) }
                 .map { it.id }
         }
         inactiveCaseIds.forEach { caseId -> removeForCase(context, caseId) }
