@@ -62,4 +62,29 @@ class MetadataEvidenceRefinerTest {
 
         assertNull(refined.issuedDate)
     }
+
+    @Test
+    fun stackedProtocolValueAfterParallelFieldLabelsIsRecovered() {
+        val text = """
+            ΔΟΚΙΜΑΣΤΙΚΗ ΥΠΗΡΕΣΙΑ
+            ΠΟΛΗ,
+            ΑΡ.ΠΡΩΤ. :
+            ΑΡ.ΦΑΚΕΛΟΥ :
+            Ε.Κ.Α. :
+            ΑΡ. ΑΔΕΙΑΣ :
+            29/11/2021
+            2021/53071
+            360696
+            X999999
+        """.trimIndent()
+        val raw = MetadataExtractor.extract(text, "synthetic-decision.pdf")
+
+        assertNull(raw.protocolNumber)
+
+        val refined = MetadataEvidenceRefiner.refine(raw, text)
+
+        assertEquals("2021/53071", refined.protocolNumber)
+        assertEquals("medium", refined.protocolConfidence)
+        assertEquals("protocol-stacked-field", refined.protocolProvenance)
+    }
 }

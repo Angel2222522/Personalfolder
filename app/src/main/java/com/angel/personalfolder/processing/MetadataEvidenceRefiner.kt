@@ -9,7 +9,7 @@ import java.util.Locale
 /**
  * Refines structural metadata patterns that are difficult to resolve from a
  * single OCR line. The rules stay conservative: they may promote explicit
- * document evidence, but they never infer a date from an unrelated number.
+ * document evidence, but they never infer a field from unrelated numbers.
  */
 object MetadataEvidenceRefiner {
     fun refine(metadata: ExtractedMetadata, primaryText: String): ExtractedMetadata {
@@ -58,13 +58,33 @@ object MetadataEvidenceRefiner {
             else -> metadata.expiryProvenance
         }
 
+        val stackedProtocol = if (metadata.protocolNumber == null) extractStackedProtocol(evidence) else null
+        val protocolNumber = metadata.protocolNumber ?: stackedProtocol
+        val protocolConfidence = if (metadata.protocolNumber != null) {
+            metadata.protocolConfidence
+        } else if (stackedProtocol != null) {
+            MetadataConfidence.MEDIUM
+        } else {
+            metadata.protocolConfidence
+        }
+        val protocolProvenance = if (metadata.protocolNumber != null) {
+            metadata.protocolProvenance
+        } else if (stackedProtocol != null) {
+            "protocol-stacked-field"
+        } else {
+            metadata.protocolProvenance
+        }
+
         val refined = metadata.copy(
             issuedDate = issuedDate,
             expiryDate = expiryDate,
+            protocolNumber = protocolNumber,
             issuedConfidence = issuedConfidence,
             expiryConfidence = expiryConfidence,
+            protocolConfidence = protocolConfidence,
             issuedProvenance = issuedProvenance,
-            expiryProvenance = expiryProvenance
+            expiryProvenance = expiryProvenance,
+            protocolProvenance = protocolProvenance
         )
         return refined.copy(json = buildJson(refined))
     }
@@ -81,6 +101,33 @@ object MetadataEvidenceRefiner {
         val folded = fold(text)
         val match = validityRangeRegex.find(folded) ?: return null
         return match.groupValues.getOrNull(2)?.let(::normalizeFourDigitDate)
+    }
+
+    private fun extractStackedProtocol(text: String): String? {
+        val lines = text.lines().map(String::trim).filter(String::isNotBlank)
+        val foldedLines = lines.map(::fold)
+        for (index in lines.indices) {
+            if (!stackedProtocolLabelRegex.matches(foldedLines[index])) continue
+            for (offset in 1..MAX_STACKED_PROTOCOL_LOOKAHEAD) {
+                val candidate = lines.getOrNull(index + offset) ?: break
+                val foldedCandidate = foldedLines[index + offset]
+                if (parallelMetadataLabelRegex.matches(foldedCandidate)) continue
+                if (fourDigitDateWholeLineRegex.matches(candidate)) continue
+                normalizeProtocolCandidate(candidate)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun normalizeProtocolCandidate(raw: String): String? {
+        val compact = raw.trim()
+            .replace(Regex("""\s*([./_\-])\s*""")) { match -> match.groupValues[1] }
+            .replace(Regex("""\s+"""), "")
+            .trim('.', ':', '#', '-', '_', '/')
+        if (compact.length !in MIN_PROTOCOL_LENGTH..MAX_PROTOCOL_LENGTH) return null
+        if (compact.none(Char::isDigit)) return null
+        if (compact.any { !it.isLetterOrDigit() && it !in ". /_-" }) return null
+        return compact
     }
 
     private fun normalizeShortDate(raw: String): String? {
@@ -165,6 +212,17 @@ object MetadataEvidenceRefiner {
         """(?:ισχυος|ισχυει|ισχυς)\s+(?:απο\s+)?(\d{1,2}[./-]\d{1,2}[./-]\d{4})\s+(?:εως|μεχρι)\s+(\d{1,2}[./-]\d{1,2}[./-]\d{4})""",
         RegexOption.IGNORE_CASE
     )
+    private val stackedProtocolLabelRegex = Regex(
+        """^(?:(?:[αa]ριθ(?:μ(?:ος)?)?\.?|[αa]ρ\.?)\s*πρωτ(?:οκ(?:ολλου)?)?\.?)\s*:\s*$""",
+        RegexOption.IGNORE_CASE
+    )
+    private val parallelMetadataLabelRegex = Regex(
+        """^(?:[αa]ρ\.?\s*φακελου|ε\.?\s*κ\.?\s*α\.?|[αa]ρ\.?\s*αδειας|ημερομηνια|ημ/νια)\s*:?\s*$""",
+        RegexOption.IGNORE_CASE
+    )
+    private val fourDigitDateWholeLineRegex = Regex(
+        """^\d{1,2}[./-]\d{1,2}[./-]\d{4}$"""
+    )
     private val NON_EXPIRING_REFERENCE_DOCUMENT_TERMS = listOf(
         "αιτηση",
         "αναφορα",
@@ -174,4 +232,7 @@ object MetadataEvidenceRefiner {
 
     private const val TWO_DIGIT_YEAR_PIVOT = 69
     private const val MAX_REFINEMENT_EVIDENCE_CHARS = 16_000
+    private const val MAX_STACKED_PROTOCOL_LOOKAHEAD = 10
+    private const val MIN_PROTOCOL_LENGTH = 3
+    private const val MAX_PROTOCOL_LENGTH = 80
 }
