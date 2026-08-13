@@ -113,6 +113,16 @@ class BackupRoundTripTest {
     @Test
     fun portableRoundTripPreservesAValidFarFutureReminder() {
         runBlocking {
+            database.documentDao().getById(documentId)!!.let { document ->
+                database.documentDao().update(
+                    document.copy(
+                        expiryDate = "2099-12-31",
+                        expiryDateConfidence = MetadataConfidence.MANUAL,
+                        expiryDateManuallyEdited = true,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+            }
             val dueAt = ReminderDatePolicy.dueAt(LocalDate.of(2099, 12, 31), 30)
             val deadlineAt = ReminderDatePolicy.deadlineAt(LocalDate.of(2099, 12, 31))
             database.reminderDao().insert(
