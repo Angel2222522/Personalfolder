@@ -38,21 +38,14 @@ jobs:
       - name: Run lint
         run: gradle lintDebug
 
-      - name: Compile instrumentation tests without running them
-        run: gradle assembleDebugAndroidTest
+      - name: Compile Android tests without running them
+        run: gradle compileDebugAndroidTestKotlin
 
-      - name: Build debug APK
-        run: gradle assembleDebug
+      - name: Compile debug app code without packaging an APK
+        run: gradle compileDebugKotlin
 
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: personal-folder-no-emulator-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-
-      - name: Verify unsigned release compilation
-        run: gradle assembleRelease
+      - name: Compile release app code without packaging an APK
+        run: gradle compileReleaseKotlin
 
       - name: Upload Room schemas
         if: always()

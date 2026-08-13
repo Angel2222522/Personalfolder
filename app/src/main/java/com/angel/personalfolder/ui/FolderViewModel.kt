@@ -11,6 +11,7 @@ import com.angel.personalfolder.data.DocumentEntity
 import com.angel.personalfolder.data.BackupService
 import com.angel.personalfolder.data.ExportService
 import com.angel.personalfolder.data.FolderRepository
+import com.angel.personalfolder.data.IndependentImportBatchRunner
 import com.angel.personalfolder.data.MetadataFieldConfirmations
 import com.angel.personalfolder.data.TimelineEventEntity
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -61,13 +62,55 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     fun setCaseFilter(value: String?) { _caseId.value = value }
     fun setExpiringSoon(value: Boolean) { _expiringSoon.value = value }
 
+    /**
+     * Multi-selection from the system picker/share sheet means independent
+     * documents. Each source gets its own DocumentEntity and its own OCR job.
+     *
+     * Scanner pages are the one deliberate exception: the in-app scanner already
+     * represents one document composed of multiple photographed pages, identified
+     * by our private FileProvider scanner path.
+     */
     fun importUris(uris: List<Uri>, onFinished: () -> Unit = {}) = viewModelScope.launch {
         _busy.value = true
-        runCatching { repository.importUris(uris) }
-            .onSuccess { if (it != null) _message.emit("Το έγγραφο εισήχθη και επεξεργάζεται τοπικά.") }
-            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η εισαγωγή.") }
-        _busy.value = false
-        runCatching { onFinished() }
+        try {
+            val distinctUris = uris.distinct()
+            if (distinctUris.isEmpty()) return@launch
+
+            if (isScannerPageBatch(distinctUris)) {
+                runCatching { repository.importUris(distinctUris) }
+                    .onSuccess {
+                        if (it != null) _message.emit("Η σάρωση εισήχθη ως ένα έγγραφο και μπήκε στην ουρά επεξεργασίας.")
+                    }
+                    .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η εισαγωγή της σάρωσης.") }
+            } else {
+                val result = IndependentImportBatchRunner.run(distinctUris) { uri ->
+                    requireNotNull(repository.importUris(listOf(uri))) {
+                        "Η μεμονωμένη εισαγωγή δεν δημιούργησε έγγραφο."
+                    }
+                }
+                when {
+                    result.totalCount == 1 && result.successCount == 1 ->
+                        _message.emit("Το έγγραφο εισήχθη και μπήκε στην ουρά επεξεργασίας.")
+                    result.failureCount == 0 ->
+                        _message.emit("Εισήχθησαν ${result.successCount} ανεξάρτητα έγγραφα και μπήκαν στην ουρά επεξεργασίας.")
+                    result.successCount > 0 ->
+                        _message.emit("Εισήχθησαν ${result.successCount} από ${result.totalCount} έγγραφα. ${result.failureCount} απέτυχαν, αλλά τα υπόλοιπα συνεχίζουν κανονικά.")
+                    else ->
+                        _message.emit("Δεν ήταν δυνατή η εισαγωγή κανενός από τα ${result.totalCount} έγγραφα.")
+                }
+            }
+        } finally {
+            _busy.value = false
+            runCatching { onFinished() }
+        }
+    }
+
+    private fun isScannerPageBatch(uris: List<Uri>): Boolean {
+        if (uris.isEmpty()) return false
+        val expectedAuthority = "${getApplication<Application>().packageName}.fileprovider"
+        return uris.all { uri ->
+            uri.authority == expectedAuthority && uri.pathSegments.firstOrNull() == SCANNER_FILE_PROVIDER_ROOT
+        }
     }
 
     suspend fun getDocument(id: String): DocumentEntity? = repository.document(id)
@@ -202,6 +245,8 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     companion object {
+        private const val SCANNER_FILE_PROVIDER_ROOT = "scanner_cache"
+
         val caseStatuses = listOf(
             CaseStatus.NEW, CaseStatus.IN_PROGRESS, CaseStatus.WAITING,
             CaseStatus.ACTION, CaseStatus.COMPLETED, CaseStatus.ARCHIVED

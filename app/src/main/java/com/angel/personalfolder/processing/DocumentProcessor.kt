@@ -24,28 +24,63 @@ import java.util.UUID
 import kotlin.math.max
 
 class DocumentProcessor(private val context: Context, private val database: AppDatabase) {
-    suspend fun process(documentId: String): Result<Unit> = DataOperationCoordinator.withExclusive { withContext(Dispatchers.IO) {
-        val document = database.documentDao().getById(documentId)
-            ?: return@withContext Result.failure(IllegalArgumentException("Το έγγραφο δεν βρέθηκε."))
-        database.documentDao().update(document.copy(processingState = ProcessingState.PROCESSING, processingError = null, updatedAt = System.currentTimeMillis()))
+    suspend fun process(documentId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        // Keep the process-wide library coordinator only around short snapshot,
+        // filesystem-copy and persistence sections. OCR/rendering itself can take
+        // seconds; holding the global mutation lock for that whole period made an
+        // unrelated import or edit look frozen.
+        val document = DataOperationCoordinator.withExclusive {
+            val current = database.documentDao().getById(documentId) ?: return@withExclusive null
+            database.documentDao().update(
+                current.copy(
+                    processingState = ProcessingState.PROCESSING,
+                    processingError = null,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            current
+        } ?: return@withContext Result.failure(IllegalArgumentException("Το έγγραφο δεν βρέθηκε."))
+
         val temporaryFiles = mutableListOf<File>()
         try {
-            val pageRows = database.documentPageDao().getForDocument(document.id).sortedBy { it.pageIndex }
-            val sources = if (pageRows.isEmpty()) {
-                listOf(DocumentPageEntity(document.id, 0, document.encryptedPath, sourceFileName = document.originalFileName, mimeType = document.mimeType))
-            } else pageRows
+            val sources = DataOperationCoordinator.withExclusive {
+                val pageRows = database.documentPageDao().getForDocument(document.id).sortedBy { it.pageIndex }
+                if (pageRows.isEmpty()) {
+                    listOf(
+                        DocumentPageEntity(
+                            document.id,
+                            0,
+                            document.encryptedPath,
+                            sourceFileName = document.originalFileName,
+                            mimeType = document.mimeType
+                        )
+                    )
+                } else {
+                    pageRows
+                }
+            }
+
             val ocr = TesseractOcrEngine(context)
             val fullTextBuilder = StringBuilder()
             val metadataAssistBuilder = StringBuilder()
             for (source in sources) {
-                val encrypted = File(source.encryptedPath)
-                require(FileCrypto.isPrivateDocumentFile(context, encrypted)) { "Η σελίδα βρίσκεται εκτός του ιδιωτικού χώρου." }
-                require(encrypted.isFile) { "Λείπει η σελίδα του εγγράφου." }
                 val plain = File(context.cacheDir, "ocr/ocr_${UUID.randomUUID()}.tmp").also {
                     it.parentFile?.mkdirs()
                     temporaryFiles += it
                 }
-                FileCrypto.decryptToTemp(encrypted, plain)
+
+                // Decrypt a stable private copy while destructive library
+                // operations are excluded, then release the global lock before
+                // expensive PDF rendering/Tesseract work begins.
+                DataOperationCoordinator.withExclusive {
+                    val encrypted = File(source.encryptedPath)
+                    require(FileCrypto.isPrivateDocumentFile(context, encrypted)) {
+                        "Η σελίδα βρίσκεται εκτός του ιδιωτικού χώρου."
+                    }
+                    require(encrypted.isFile) { "Λείπει η σελίδα του εγγράφου." }
+                    FileCrypto.decryptToTemp(encrypted, plain)
+                }
+
                 val mime = source.mimeType.ifBlank { document.mimeType }
                 val remainingCharacters = (MAX_DOCUMENT_OCR_CHARS - fullTextBuilder.length).coerceAtLeast(0)
                 val recognized = if (remainingCharacters == 0) {
@@ -64,55 +99,96 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                         bitmap.recycle()
                     }
                 }
+
                 val text = recognized.text
                 if (text.isNotBlank()) {
                     if (fullTextBuilder.isNotEmpty()) fullTextBuilder.append("\n\n")
-                    fullTextBuilder.append(text.take((MAX_DOCUMENT_OCR_CHARS - fullTextBuilder.length).coerceAtLeast(0)))
+                    fullTextBuilder.append(
+                        text.take((MAX_DOCUMENT_OCR_CHARS - fullTextBuilder.length).coerceAtLeast(0))
+                    )
                 }
                 appendMetadataAssist(metadataAssistBuilder, recognized.metadataAssistText)
-                database.documentPageDao().updateOcr(document.id, source.pageIndex, text)
+
+                DataOperationCoordinator.withExclusive {
+                    if (database.documentDao().getById(document.id) != null) {
+                        database.documentPageDao().updateOcr(document.id, source.pageIndex, text)
+                    }
+                }
             }
+
             val fullText = fullTextBuilder.toString().trim()
             val metadata = MetadataExtractor.extract(
                 fullText,
                 document.title,
                 metadataAssistBuilder.toString()
             )
-            // Read the latest row before applying OCR suggestions. A user may have edited
-            // metadata while OCR was running; never overwrite that newer manual choice.
-            val latest = database.documentDao().getById(document.id) ?: document
+
             if (fullText.isBlank()) {
                 val message = "Η αναγνώριση ολοκληρώθηκε χωρίς αναγνωρίσιμο κείμενο."
-                database.documentDao().update(latest.copy(processingState = ProcessingState.FAILED, processingError = message, updatedAt = System.currentTimeMillis()))
-                return@withContext Result.failure(IllegalStateException(message))
+                val stillExists = DataOperationCoordinator.withExclusive {
+                    val latest = database.documentDao().getById(document.id) ?: return@withExclusive false
+                    database.documentDao().update(
+                        latest.copy(
+                            processingState = ProcessingState.FAILED,
+                            processingError = message,
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    )
+                    true
+                }
+                return@withContext if (stillExists) {
+                    Result.failure(IllegalStateException(message))
+                } else {
+                    Result.success(Unit)
+                }
             }
-            // Keep low-confidence candidates in their fields together with
-            // confidence/provenance. They remain visibly unconfirmed and
-            // cannot create reminders, but can be confirmed per field later.
-            val updated = MetadataApplicationPolicy.apply(latest, metadata).copy(
-                ocrText = fullText,
-                extractedMetadataJson = metadata.json,
-                processingState = ProcessingState.PROCESSED,
-                processingError = null,
-                updatedAt = System.currentTimeMillis()
-            )
-            database.documentDao().update(updated)
-            val finalExpiry = updated.expiryDate
-            ReminderScheduler.replaceForDocument(context, document.id, updated.title, finalExpiry)
+
+            val updated = DataOperationCoordinator.withExclusive {
+                // Read the latest row before applying OCR suggestions. A user may
+                // have edited metadata while OCR was running; never overwrite that
+                // newer manual choice. If the document was deleted meanwhile, the
+                // background job quietly finishes without recreating it.
+                val latest = database.documentDao().getById(document.id) ?: return@withExclusive null
+                val candidate = MetadataApplicationPolicy.apply(latest, metadata).copy(
+                    ocrText = fullText,
+                    extractedMetadataJson = metadata.json,
+                    processingState = ProcessingState.PROCESSED,
+                    processingError = null,
+                    updatedAt = System.currentTimeMillis()
+                )
+                database.documentDao().update(candidate)
+                candidate
+            } ?: return@withContext Result.success(Unit)
+
+            DataOperationCoordinator.withExclusive {
+                if (database.documentDao().getById(document.id) != null) {
+                    ReminderScheduler.replaceForDocument(
+                        context,
+                        document.id,
+                        updated.title,
+                        updated.expiryDate
+                    )
+                }
+            }
             Result.success(Unit)
         } catch (error: Throwable) {
             if (error is CancellationException || error is OutOfMemoryError) throw error
-            val latest = database.documentDao().getById(document.id) ?: document
-            database.documentDao().update(latest.copy(
-                processingState = ProcessingState.FAILED,
-                processingError = error.message?.take(300) ?: "Άγνωστο σφάλμα επεξεργασίας.",
-                updatedAt = System.currentTimeMillis()
-            ))
-            Result.failure(error)
+            val stillExists = DataOperationCoordinator.withExclusive {
+                val latest = database.documentDao().getById(document.id) ?: return@withExclusive false
+                database.documentDao().update(
+                    latest.copy(
+                        processingState = ProcessingState.FAILED,
+                        processingError = error.message?.take(300) ?: "Άγνωστο σφάλμα επεξεργασίας.",
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
+                true
+            }
+            if (stillExists) Result.failure(error) else Result.success(Unit)
         } finally {
             temporaryFiles.forEach { it.delete() }
         }
-    } }
+    }
 
     private suspend fun recognizePdf(file: File, ocr: TesseractOcrEngine, maxCharacters: Int): RecognizedContent {
         if (maxCharacters <= 0) return RecognizedContent("", "")
@@ -148,7 +224,9 @@ class DocumentProcessor(private val context: Context, private val database: AppD
 
                         if (pageResult.text.isNotBlank()) {
                             if (visible.isNotEmpty()) visible.append("\n\n")
-                            visible.append(pageResult.text.take((maxCharacters - visible.length).coerceAtLeast(0)))
+                            visible.append(
+                                pageResult.text.take((maxCharacters - visible.length).coerceAtLeast(0))
+                            )
                         }
                         appendMetadataAssist(metadataAssist, pageResult.metadataAssistText)
                     }
@@ -176,13 +254,24 @@ class DocumentProcessor(private val context: Context, private val database: AppD
         require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Δεν ήταν δυνατή η ανάγνωση της εικόνας." }
         var sample = 1
         while (max(bounds.outWidth / sample, bounds.outHeight / sample) > OCR_MAX_SIDE) sample *= 2
-        val decoded = BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply {
-            inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }) ?: error("Δεν ήταν δυνατή η αποκωδικοποίηση της εικόνας.")
+        val decoded = BitmapFactory.decodeFile(
+            file.absolutePath,
+            BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+        ) ?: error("Δεν ήταν δυνατή η αποκωδικοποίηση της εικόνας.")
         val rotation = runCatching { ExifInterface(file.absolutePath).rotationDegrees }.getOrDefault(0)
         if (rotation == 0) return decoded
-        val rotated = Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, Matrix().apply { postRotate(rotation.toFloat()) }, true)
+        val rotated = Bitmap.createBitmap(
+            decoded,
+            0,
+            0,
+            decoded.width,
+            decoded.height,
+            Matrix().apply { postRotate(rotation.toFloat()) },
+            true
+        )
         if (rotated !== decoded) decoded.recycle()
         return rotated
     }
