@@ -20,9 +20,10 @@ import androidx.lifecycle.lifecycleScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.angel.personalfolder.security.TempFileCleaner
 import com.angel.personalfolder.data.ExportService
+import com.angel.personalfolder.data.ReminderScheduler
 import com.angel.personalfolder.processing.ScannerImageProcessor
+import com.angel.personalfolder.security.PendingActivityStateStore
 import com.angel.personalfolder.ui.FolderApp
 import com.angel.personalfolder.ui.FolderViewModel
 import com.angel.personalfolder.ui.PersonalFolderTheme
@@ -61,7 +62,9 @@ class MainActivity : FragmentActivity() {
         if (granted) launchCamera()
     }
 
-    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        lifecycleScope.launch { ReminderScheduler.rescheduleAll(this@MainActivity) }
+    }
 
     private val cameraCapture = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         val file = cameraFile
@@ -75,25 +78,29 @@ class MainActivity : FragmentActivity() {
     }
 
     private val backupCreator = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
-        val password = pendingBackupPassword
+        val password = pendingBackupPassword ?: PendingActivityStateStore.consumePassword(this)
+        PendingActivityStateStore.clear(this)
         pendingBackupPassword = null
         if (uri != null && password != null) viewModel.createBackup(uri, password)
     }
 
     private val backupPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        val password = pendingBackupPassword
+        val password = pendingBackupPassword ?: PendingActivityStateStore.consumePassword(this)
+        PendingActivityStateStore.clear(this)
         pendingBackupPassword = null
         if (uri != null && password != null) viewModel.restoreBackup(uri, password)
     }
 
     private val exportCreator = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        val documentIds = pendingExportDocumentIds
+        val documentIds = pendingExportDocumentIds.ifEmpty { PendingActivityStateStore.consumeList(this, STATE_EXPORT_IDS) }
+        PendingActivityStateStore.clearList(this, STATE_EXPORT_IDS)
         pendingExportDocumentIds = emptyList()
         if (uri != null && documentIds.isNotEmpty()) viewModel.exportDocuments(uri, documentIds)
     }
 
     private val pdfExportCreator = registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
-        val documentIds = pendingPdfDocumentIds
+        val documentIds = pendingPdfDocumentIds.ifEmpty { PendingActivityStateStore.consumeList(this, STATE_PDF_IDS) }
+        PendingActivityStateStore.clearList(this, STATE_PDF_IDS)
         pendingPdfDocumentIds = emptyList()
         if (uri != null && documentIds.isNotEmpty()) viewModel.exportPdf(uri, documentIds)
     }
@@ -102,7 +109,12 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        lifecycleScope.launch { TempFileCleaner.recover(this@MainActivity) }
+        restorePendingState(savedInstanceState)
+        if (savedInstanceState == null) {
+            pendingExportDocumentIds = PendingActivityStateStore.peekList(this, STATE_EXPORT_IDS)
+            pendingPdfDocumentIds = PendingActivityStateStore.peekList(this, STATE_PDF_IDS)
+            pendingIncomingUris = PendingActivityStateStore.peekList(this, STATE_INCOMING_URIS).map(Uri::parse)
+        }
         lockEnabled = settings.getBoolean(KEY_LOCK, false)
         if (lockEnabled && !canAuthenticate()) {
             // An already-enabled lock must fail closed. Do not silently weaken the
@@ -126,11 +138,11 @@ class MainActivity : FragmentActivity() {
                         onSuccess = { settings.edit().putBoolean(KEY_LOCK, false).apply(); lockEnabled = false; sessionUnlocked = true },
                         onFailure = ::showAuthMessage
                     ) },
-                    onCreateBackup = { password -> pendingBackupPassword = password; backupCreator.launch("personal-folder-backup.pfb") },
-                    onRestoreBackup = { password -> pendingBackupPassword = password; backupPicker.launch(arrayOf("application/octet-stream", "application/zip", "*/*")) },
+                    onCreateBackup = { password -> pendingBackupPassword = password; PendingActivityStateStore.savePassword(this, password); backupCreator.launch("personal-folder-backup.pfb") },
+                    onRestoreBackup = { password -> pendingBackupPassword = password; PendingActivityStateStore.savePassword(this, password); backupPicker.launch(arrayOf("application/octet-stream", "application/zip", "*/*")) },
                     onRequestNotifications = ::requestNotificationPermission,
-                    onExportDocuments = { documentIds -> pendingExportDocumentIds = documentIds; exportCreator.launch("personal-folder-export.zip") },
-                    onExportPdf = { documentIds -> pendingPdfDocumentIds = documentIds; pdfExportCreator.launch("personal-folder-export.pdf") },
+                    onExportDocuments = { documentIds -> pendingExportDocumentIds = documentIds; PendingActivityStateStore.saveList(this, STATE_EXPORT_IDS, documentIds); exportCreator.launch("personal-folder-export.zip") },
+                    onExportPdf = { documentIds -> pendingPdfDocumentIds = documentIds; PendingActivityStateStore.saveList(this, STATE_PDF_IDS, documentIds); pdfExportCreator.launch("personal-folder-export.pdf") },
                     scannerOpen = scannerOpen,
                     scannerPageUris = scannerFiles.map { FileProvider.getUriForFile(this, "$packageName.fileprovider", it) },
                     onScannerAddPage = { launchCamera() },
@@ -146,6 +158,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        lifecycleScope.launch { ReminderScheduler.rescheduleAll(this@MainActivity) }
         if (lockEnabled && !canAuthenticate()) {
             sessionUnlocked = false
             showAuthMessage("Το κλείδωμα παραμένει ενεργό. Ενεργοποίησε ξανά μια ασφαλή συσκευή ταυτοποίησης για να ξεκλειδώσεις.")
@@ -163,6 +176,16 @@ class MainActivity : FragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIncomingIntent(intent)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putStringArrayList(KEY_PENDING_EXPORT_IDS, ArrayList(pendingExportDocumentIds))
+        outState.putStringArrayList(KEY_PENDING_PDF_IDS, ArrayList(pendingPdfDocumentIds))
+        outState.putParcelableArrayList(KEY_PENDING_INCOMING_URIS, ArrayList(pendingIncomingUris))
+        outState.putString(KEY_LAST_INCOMING_KEY, lastIncomingIntentKey)
+        outState.putStringArrayList(KEY_SCANNER_FILES, ArrayList(scannerFiles.map(File::getAbsolutePath)))
+        outState.putBoolean(KEY_SCANNER_OPEN, scannerOpen)
+        super.onSaveInstanceState(outState)
     }
 
     private fun takePhoto() {
@@ -199,6 +222,7 @@ class MainActivity : FragmentActivity() {
             lastIncomingIntentKey = key
             if (lockEnabled && !sessionUnlocked) {
                 pendingIncomingUris = (pendingIncomingUris + uris).distinct().take(MAX_PENDING_INCOMING_URIS)
+                PendingActivityStateStore.saveList(this, STATE_INCOMING_URIS, pendingIncomingUris.map(Uri::toString))
                 if (pendingIncomingUris.size >= MAX_PENDING_INCOMING_URIS) showAuthMessage("Υπάρχουν ήδη πολλές εισαγωγές σε αναμονή για ξεκλείδωμα.")
             }
             else viewModel.importUris(uris)
@@ -206,7 +230,8 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun flushPendingIncoming() {
-        val queued = pendingIncomingUris
+        val queued = pendingIncomingUris.ifEmpty { PendingActivityStateStore.consumeList(this, STATE_INCOMING_URIS).map(Uri::parse) }
+        PendingActivityStateStore.clearList(this, STATE_INCOMING_URIS)
         pendingIncomingUris = emptyList()
         if (queued.isNotEmpty()) viewModel.importUris(queued)
     }
@@ -226,7 +251,6 @@ class MainActivity : FragmentActivity() {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 startActivity(Intent.createChooser(intent, getString(R.string.open_original)))
-                TempFileCleaner.scheduleDeletion(file)
                 shareFile = null
             }.onFailure { showAuthMessage(it.message ?: "Δεν ήταν δυνατό το άνοιγμα του εγγράφου.") }
             shareFile?.delete()
@@ -249,7 +273,6 @@ class MainActivity : FragmentActivity() {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 startActivity(Intent.createChooser(intent, getString(R.string.share_document)))
-                TempFileCleaner.scheduleDeletion(file)
                 shareFile = null
             }.onFailure { showAuthMessage(it.message ?: "Δεν ήταν δυνατή η κοινοποίηση.") }
             shareFile?.delete()
@@ -339,5 +362,24 @@ class MainActivity : FragmentActivity() {
         private const val KEY_LOCK = "biometric_lock"
         private const val MAX_INCOMING_URIS = 100
         private const val MAX_PENDING_INCOMING_URIS = 100
+        private const val KEY_PENDING_EXPORT_IDS = "pending_export_ids"
+        private const val KEY_PENDING_PDF_IDS = "pending_pdf_ids"
+        private const val KEY_PENDING_INCOMING_URIS = "pending_incoming_uris"
+        private const val KEY_LAST_INCOMING_KEY = "last_incoming_key"
+        private const val KEY_SCANNER_FILES = "scanner_files"
+        private const val KEY_SCANNER_OPEN = "scanner_open"
+        private const val STATE_EXPORT_IDS = "export_ids"
+        private const val STATE_PDF_IDS = "pdf_ids"
+        private const val STATE_INCOMING_URIS = "incoming_uris"
+    }
+
+    private fun restorePendingState(savedInstanceState: Bundle?) {
+        if (savedInstanceState == null) return
+        pendingExportDocumentIds = savedInstanceState.getStringArrayList(KEY_PENDING_EXPORT_IDS).orEmpty()
+        pendingPdfDocumentIds = savedInstanceState.getStringArrayList(KEY_PENDING_PDF_IDS).orEmpty()
+        pendingIncomingUris = savedInstanceState.getParcelableArrayList<Uri>(KEY_PENDING_INCOMING_URIS).orEmpty()
+        lastIncomingIntentKey = savedInstanceState.getString(KEY_LAST_INCOMING_KEY)
+        scannerFiles = savedInstanceState.getStringArrayList(KEY_SCANNER_FILES).orEmpty().map(::File)
+        scannerOpen = savedInstanceState.getBoolean(KEY_SCANNER_OPEN, false)
     }
 }

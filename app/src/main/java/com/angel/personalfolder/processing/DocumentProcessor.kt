@@ -8,8 +8,10 @@ import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import androidx.exifinterface.media.ExifInterface
 import com.angel.personalfolder.data.AppDatabase
+import com.angel.personalfolder.data.DataOperationCoordinator
 import com.angel.personalfolder.data.DocumentEntity
 import com.angel.personalfolder.data.DocumentPageEntity
+import com.angel.personalfolder.data.PdfBitmapRenderer
 import com.angel.personalfolder.data.ProcessingState
 import com.angel.personalfolder.data.ReminderScheduler
 import com.angel.personalfolder.security.FileCrypto
@@ -19,25 +21,12 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 import kotlin.math.max
-import kotlin.math.roundToInt
 
 class DocumentProcessor(private val context: Context, private val database: AppDatabase) {
-    suspend fun process(documentId: String): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun process(documentId: String): Result<Unit> = DataOperationCoordinator.withExclusive { withContext(Dispatchers.IO) {
         val document = database.documentDao().getById(documentId)
             ?: return@withContext Result.failure(IllegalArgumentException("Το έγγραφο δεν βρέθηκε."))
-        database.documentDao().updateProcessing(
-            id = document.id,
-            category = document.category,
-            ocrText = document.ocrText,
-            provider = document.provider,
-            issuedDate = document.issuedDate,
-            expiryDate = document.expiryDate,
-            protocolNumber = document.protocolNumber,
-            metadataJson = document.extractedMetadataJson,
-            state = ProcessingState.PROCESSING,
-            error = null,
-            updatedAt = System.currentTimeMillis()
-        )
+        database.documentDao().update(document.copy(processingState = ProcessingState.PROCESSING, processingError = null, updatedAt = System.currentTimeMillis()))
         val temporaryFiles = mutableListOf<File>()
         try {
             val pageRows = database.documentPageDao().getForDocument(document.id).sortedBy { it.pageIndex }
@@ -76,67 +65,38 @@ class DocumentProcessor(private val context: Context, private val database: AppD
             // Read the latest row before applying OCR suggestions. A user may have edited
             // metadata while OCR was running; never overwrite that newer manual choice.
             val latest = database.documentDao().getById(document.id) ?: document
-            val keepManualMetadata = latest.metadataManuallyEdited
             if (fullText.isBlank()) {
                 val message = "Το OCR ολοκληρώθηκε χωρίς αναγνωρίσιμο κείμενο."
-                database.documentDao().updateProcessing(
-                    id = document.id,
-                    category = latest.category,
-                    ocrText = latest.ocrText,
-                    provider = latest.provider,
-                    issuedDate = latest.issuedDate,
-                    expiryDate = latest.expiryDate,
-                    protocolNumber = latest.protocolNumber,
-                    metadataJson = latest.extractedMetadataJson,
-                    state = ProcessingState.FAILED,
-                    error = message,
-                    updatedAt = System.currentTimeMillis()
-                )
+                database.documentDao().update(latest.copy(processingState = ProcessingState.FAILED, processingError = message, updatedAt = System.currentTimeMillis()))
                 return@withContext Result.failure(IllegalStateException(message))
             }
-            database.documentDao().updateProcessing(
-                id = document.id,
-                category = if (keepManualMetadata) latest.category else metadata.category,
+            // Keep low-confidence candidates in their fields together with
+            // confidence/provenance. They remain visibly unconfirmed and
+            // cannot create reminders, but can be confirmed per field later.
+            val updated = MetadataApplicationPolicy.apply(latest, metadata).copy(
                 ocrText = fullText,
-                provider = if (keepManualMetadata) latest.provider else metadata.provider,
-                issuedDate = if (keepManualMetadata) latest.issuedDate else metadata.issuedDate,
-                expiryDate = if (keepManualMetadata) latest.expiryDate else metadata.expiryDate,
-                protocolNumber = if (keepManualMetadata) latest.protocolNumber else metadata.protocolNumber,
-                metadataJson = metadata.json,
-                state = ProcessingState.PROCESSED,
-                error = null,
+                extractedMetadataJson = metadata.json,
+                processingState = ProcessingState.PROCESSED,
+                processingError = null,
                 updatedAt = System.currentTimeMillis()
             )
-            val finalExpiry = if (keepManualMetadata) {
-                latest.expiryDate
-            } else if (metadata.expiryConfidence == "high" || metadata.expiryConfidence == "medium") {
-                metadata.expiryDate
-            } else {
-                null
-            }
-            ReminderScheduler.replaceForDocument(context, document.id, latest.title, finalExpiry)
+            database.documentDao().update(updated)
+            val finalExpiry = updated.expiryDate
+            ReminderScheduler.replaceForDocument(context, document.id, updated.title, finalExpiry)
             Result.success(Unit)
         } catch (error: Throwable) {
             if (error is CancellationException || error is OutOfMemoryError) throw error
             val latest = database.documentDao().getById(document.id) ?: document
-            database.documentDao().updateProcessing(
-                id = document.id,
-                category = latest.category,
-                ocrText = latest.ocrText,
-                provider = latest.provider,
-                issuedDate = latest.issuedDate,
-                expiryDate = latest.expiryDate,
-                protocolNumber = latest.protocolNumber,
-                metadataJson = latest.extractedMetadataJson,
-                state = ProcessingState.FAILED,
-                error = error.message?.take(300) ?: "Άγνωστο σφάλμα επεξεργασίας.",
+            database.documentDao().update(latest.copy(
+                processingState = ProcessingState.FAILED,
+                processingError = error.message?.take(300) ?: "Άγνωστο σφάλμα επεξεργασίας.",
                 updatedAt = System.currentTimeMillis()
-            )
+            ))
             Result.failure(error)
         } finally {
             temporaryFiles.forEach { it.delete() }
         }
-    }
+    } }
 
     private suspend fun recognizePdf(file: File, ocr: TesseractOcrEngine, maxCharacters: Int): String {
         if (maxCharacters <= 0) return ""
@@ -147,14 +107,8 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                     for (index in 0 until renderer.pageCount) {
                         if (length >= maxCharacters) break
                         renderer.openPage(index).use { page ->
-                            val scale = minOf(3f, 2200f / max(page.width, page.height).coerceAtLeast(1))
-                            val bitmap = Bitmap.createBitmap(
-                                (page.width * scale).roundToInt().coerceAtLeast(1),
-                                (page.height * scale).roundToInt().coerceAtLeast(1),
-                                Bitmap.Config.ARGB_8888
-                            )
+                            val bitmap = PdfBitmapRenderer.render(page, OCR_MAX_SIDE)
                             try {
-                                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                                 val text = ocr.recognize(bitmap)
                                 if (text.isNotBlank()) {
                                     if (isNotEmpty()) append("\n\n")

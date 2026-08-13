@@ -97,5 +97,6 @@ object BackupCrypto {
         }
     }
 
-    private const val MAX_DECRYPTED_BYTES = 512L * 1024 * 1024 + 16L * 1024 * 1024
+    /** Matches the application's aggregate backup payload budget plus zip overhead. */
+    private const val MAX_DECRYPTED_BYTES = 2L * 1024 * 1024 * 1024 + 32L * 1024 * 1024
 }

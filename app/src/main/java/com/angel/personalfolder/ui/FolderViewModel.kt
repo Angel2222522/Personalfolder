@@ -11,6 +11,7 @@ import com.angel.personalfolder.data.DocumentEntity
 import com.angel.personalfolder.data.BackupService
 import com.angel.personalfolder.data.ExportService
 import com.angel.personalfolder.data.FolderRepository
+import com.angel.personalfolder.data.MetadataFieldConfirmations
 import com.angel.personalfolder.data.TimelineEventEntity
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +44,8 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
         repository.documents(filters.query, filters.category, filters.processingState, filters.caseId, filters.expiringSoon)
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val allDocuments: StateFlow<List<DocumentEntity>> = repository.allDocuments()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val cases: StateFlow<List<CaseEntity>> = repository.cases()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val pendingReminders = repository.pendingReminders()
@@ -69,8 +72,8 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
 
     suspend fun getDocument(id: String): DocumentEntity? = repository.document(id)
 
-    fun updateDocument(id: String, title: String, category: String, tags: String, provider: String, issuedDate: String?, expiryDate: String?, protocolNumber: String?) = viewModelScope.launch {
-        runCatching { repository.updateDocumentMetadata(id, title, category, tags, provider, issuedDate, expiryDate, protocolNumber) }
+    fun updateDocument(id: String, title: String, category: String, tags: String, provider: String, issuedDate: String?, expiryDate: String?, protocolNumber: String?, confirmedFields: MetadataFieldConfirmations? = null) = viewModelScope.launch {
+        runCatching { repository.updateDocumentMetadata(id, title, category, tags, provider, issuedDate, expiryDate, protocolNumber, confirmedFields) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αποθήκευση.") }
     }
 
@@ -109,15 +112,18 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun updateCaseStatus(id: String, status: String) = viewModelScope.launch {
-        repository.updateCaseStatus(id, status)
+        runCatching { repository.updateCaseStatus(id, status) }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αλλαγή κατάστασης.") }
     }
 
     fun addTimelineEvent(caseId: String, title: String, note: String) = viewModelScope.launch {
-        if (title.isNotBlank()) repository.addTimelineEvent(caseId, title, note)
+        if (title.isNotBlank()) runCatching { repository.addTimelineEvent(caseId, title, note) }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η προσθήκη γεγονότος.") }
     }
 
     fun addChecklistItem(caseId: String, title: String) = viewModelScope.launch {
-        if (title.isNotBlank()) repository.addChecklistItem(caseId, title)
+        if (title.isNotBlank()) runCatching { repository.addChecklistItem(caseId, title) }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η προσθήκη δικαιολογητικού.") }
     }
 
     fun addChecklistItem(caseId: String, title: String, linkedDocumentId: String?) = viewModelScope.launch {
@@ -126,7 +132,8 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setChecklistComplete(item: ChecklistItemEntity, complete: Boolean) = viewModelScope.launch {
-        repository.setChecklistComplete(item.id, complete)
+        runCatching { repository.setChecklistComplete(item.id, complete) }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η ενημέρωση.") }
     }
 
     fun linkChecklistDocument(item: ChecklistItemEntity, documentId: String?) = viewModelScope.launch {
@@ -134,22 +141,28 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η σύνδεση.") }
     }
 
-    fun deleteChecklistItem(item: ChecklistItemEntity) = viewModelScope.launch { repository.deleteChecklistItem(item.id) }
+    fun deleteChecklistItem(item: ChecklistItemEntity) = viewModelScope.launch {
+        runCatching { repository.deleteChecklistItem(item.id) }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η διαγραφή.") }
+    }
 
     fun timeline(caseId: String) = repository.timeline(caseId)
     fun checklist(caseId: String) = repository.checklist(caseId)
     fun caseDocuments(caseId: String) = repository.caseDocuments(caseId)
 
     fun attachDocumentToCase(caseId: String, documentId: String) = viewModelScope.launch {
-        repository.attachDocumentToCase(caseId, documentId)
+        runCatching { repository.attachDocumentToCase(caseId, documentId) }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η σύνδεση.") }
     }
 
     fun detachDocumentFromCase(caseId: String, documentId: String) = viewModelScope.launch {
-        repository.detachDocumentFromCase(caseId, documentId)
+        runCatching { repository.detachDocumentFromCase(caseId, documentId) }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αποσύνδεση.") }
     }
 
     fun markReminderDone(id: String) = viewModelScope.launch {
-        repository.markReminderDone(id)
+        runCatching { repository.markReminderDone(id) }
+            .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η ενημέρωση της υπενθύμισης.") }
     }
 
     fun reportError(message: String) { _message.tryEmit(message) }

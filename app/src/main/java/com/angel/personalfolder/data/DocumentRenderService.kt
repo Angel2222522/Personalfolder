@@ -12,7 +12,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.max
-import kotlin.math.roundToInt
 
 data class LogicalDocumentPage(
     val number: Int,
@@ -103,17 +102,7 @@ class DocumentRenderService(private val context: Context) {
                 PdfRenderer(descriptor).use { renderer ->
                     require(sourcePageIndex in 0 until renderer.pageCount) { "Μη έγκυρος αριθμός σελίδας." }
                     renderer.openPage(sourcePageIndex).use { page ->
-                        val scale = minOf(
-                            3f,
-                            maxDimension.toFloat() / max(page.width, page.height).coerceAtLeast(1)
-                        )
-                        val bitmap = Bitmap.createBitmap(
-                            (page.width * scale).roundToInt().coerceAtLeast(1),
-                            (page.height * scale).roundToInt().coerceAtLeast(1),
-                            Bitmap.Config.ARGB_8888
-                        )
-                        page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                        return bitmap
+                        return PdfBitmapRenderer.render(page, maxDimension)
                     }
                 }
             }

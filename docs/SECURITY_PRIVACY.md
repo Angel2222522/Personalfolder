@@ -10,7 +10,7 @@
 - Backup restore rejects traversal names, duplicate entries/IDs, invalid references, oversized archives, missing files and malformed relationships before commit.
 - `FLAG_SECURE` protects the app window from screenshots and recent-task previews. Biometric/device credential capability is checked before enabling the lock, and authentication errors are never success.
 - Notifications use private visibility and generic text at all times; document and case titles are not placed on system notification surfaces.
-- Temporary decrypted files have short cache lifetimes, deterministic cleanup and startup recovery.
+- Temporary decrypted files have short cache lifetimes, deterministic cleanup and startup recovery. A backup/password picker state is encrypted with a separate Keystore AES-GCM key and expires after 15 minutes; no plaintext password is written to Bundle or preferences.
 
 ## Explicit boundaries
 
@@ -20,7 +20,7 @@ Ordinary ZIP/PDF export is plaintext by design and is clearly labeled in the UI.
 
 ## Input and resource policy
 
-Imports are limited to supported PDF/image MIME types, 100 sources, a 512 MiB aggregate plaintext budget and 1,000 logical pages. OCR image dimensions, text output, PDF render dimensions, archive entry count, restored page/reminder counts and archive bytes are bounded. PDF export is streamed one rendered page at a time with output limits.
+Imports are limited to supported PDF/image MIME types, 100 sources, a 512 MiB aggregate plaintext budget and 1,000 logical pages, and image decoders validate the actual bytes after MIME checks. OCR image dimensions, text output, PDF render dimensions, archive entry count, restored page/reminder counts and archive bytes are bounded. PDF export is streamed one rendered page at a time with output limits.
 
 These are availability protections, not a promise that every malformed OEM decoder or PDF implementation behaves safely. The app reports failures locally and does not upload document content.
 

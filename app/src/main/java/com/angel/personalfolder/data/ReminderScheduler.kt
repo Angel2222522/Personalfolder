@@ -20,13 +20,15 @@ object ReminderScheduler {
         dao.getForDocument(documentId).forEach { cancel(context, it.id) }
         dao.deleteForDocument(documentId)
         val date = expiry?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: return
+        val deadlineAt = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         leadDays.forEach { lead ->
             val reminder = ReminderEntity(
                 id = UUID.randomUUID().toString(),
                 title = "Λήξη: ${title.ifBlank { "Έγγραφο" }}",
                 dueAt = date.minusDays(lead.toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
                 documentId = documentId,
-                leadDays = lead
+                leadDays = lead,
+                deadlineAt = deadlineAt
             )
             dao.insert(reminder)
             scheduleWork(context, reminder)
@@ -38,13 +40,15 @@ object ReminderScheduler {
         dao.getForCase(caseId).forEach { cancel(context, it.id) }
         dao.deleteForCase(caseId)
         val date = deadline?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: return
+        val deadlineAt = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         leadDays.forEach { lead ->
             val reminder = ReminderEntity(
                 id = UUID.randomUUID().toString(),
                 title = "Προθεσμία υπόθεσης: ${title.ifBlank { "Υπόθεση" }}",
                 dueAt = date.minusDays(lead.toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
                 caseId = caseId,
-                leadDays = lead
+                leadDays = lead,
+                deadlineAt = deadlineAt
             )
             dao.insert(reminder)
             scheduleWork(context, reminder)
@@ -72,8 +76,11 @@ object ReminderScheduler {
     }
 
     private fun scheduleWork(context: Context, reminder: ReminderEntity) {
-        if (reminder.isDone || reminder.dueAt <= System.currentTimeMillis()) return
-        val delay = reminder.dueAt - System.currentTimeMillis()
+        if (reminder.isDone) return
+        // A past trigger is still a pending reminder. Scheduling it with zero
+        // delay lets WorkManager deliver it after a missed run or permission
+        // recovery instead of silently dropping it.
+        val delay = ReminderDeliveryPolicy.initialDelayMs(reminder.dueAt, System.currentTimeMillis())
         val request = OneTimeWorkRequestBuilder<ReminderWorker>()
             .setInitialDelay(delay, TimeUnit.MILLISECONDS)
             .setInputData(workDataOf(ReminderWorker.KEY_REMINDER_ID to reminder.id))

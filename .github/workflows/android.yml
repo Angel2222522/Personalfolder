@@ -31,7 +31,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
-        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "platforms;android-28" "system-images;android-28;default;x86"
 
       - name: Run unit tests
         run: gradle testDebugUnitTest
@@ -45,6 +45,57 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug
 
+      - name: Upload OCR-fix debug APK early
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-folder-ocrfix-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Run instrumentation tests on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          # The hosted runner has no KVM access. API 35 and API 30 Google APIs
+          # images remained offline and never exposed the package service. A
+          # small API 28 default image still exercises PdfRenderer, Room and
+          # Android Keystore while avoiding the unnecessary Google-services
+          # boot cost for these tests.
+          api-level: 28
+          target: default
+          arch: x86
+          # avdmanager uses the lowercase hardware-profile identifier on the
+          # current GitHub runner SDK. The display name `Pixel_2` is not a
+          # valid device id there and prevents instrumentation from starting.
+          profile: pixel_2
+          cores: 2
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -wipe-data
+          disable-animations: true
+          # The emulator runner executes each newline in `script` in a
+          # separate shell. Keep status capture and diagnostics in one shell
+          # so a successful Gradle test run cannot turn into `exit: Illegal
+          # number`, while a real test failure still fails the job.
+          script: >-
+            sh -c 'set +e; gradle connectedDebugAndroidTest --stacktrace; status=$?; adb logcat -d -b all -v threadtime > "$RUNNER_TEMP/personal-folder-instrumentation-logcat.txt" || true; echo "--- Recent device logcat after instrumentation failure ---"; tail -n 400 "$RUNNER_TEMP/personal-folder-instrumentation-logcat.txt" || true; exit "$status"'
+
+      - name: Upload debug APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-folder-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+      - name: Upload instrumentation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-folder-instrumentation-diagnostics
+          path: |
+            app/build/reports/androidTests/**
+            app/build/outputs/androidTest-results/**
+            ${{ runner.temp }}/personal-folder-instrumentation-logcat.txt
+          if-no-files-found: ignore
+
       - name: Verify unsigned release compilation on pull requests
         if: github.event_name == 'pull_request'
         run: gradle assembleRelease
@@ -56,37 +107,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.PERSONAL_FOLDER_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.PERSONAL_FOLDER_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.PERSONAL_FOLDER_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          for value in "$KEYSTORE_BASE64" "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD"; do
-            if [ -z "$value" ]; then
-              echo "Permanent Personal Folder release signing secrets are missing. Refusing to produce a release APK."
-              exit 1
-            fi
-          done
-
-          KEYSTORE_PATH="$RUNNER_TEMP/personal-folder-release.jks"
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-
-          EXPECTED_SHA256="2642FD5E5E43A90EB6DA7B3462E14313BE9DA8C479ECAABC404076071F0A049B"
-          ACTUAL_SHA256=$(keytool -list -v \
-            -keystore "$KEYSTORE_PATH" \
-            -storepass "$KEYSTORE_PASSWORD" \
-            -alias "$KEY_ALIAS" \
-            | sed -n 's/^[[:space:]]*SHA256: //p' \
-            | head -n 1 \
-            | tr -d ':' \
-            | tr '[:lower:]' '[:upper:]')
-
-          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
-            echo "Signing certificate does not match the permanent Personal Folder certificate. Refusing release."
-            exit 1
-          fi
-
-          echo "PERSONAL_FOLDER_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
-          echo "PERSONAL_FOLDER_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
-          echo "PERSONAL_FOLDER_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
-          echo "PERSONAL_FOLDER_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+        run: ./scripts/prepare-signing.sh
 
       - name: Build permanently signed release APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -118,12 +139,6 @@ jobs:
             echo "Built APK is not signed with the permanent Personal Folder certificate."
             exit 1
           fi
-
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: personal-folder-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
 
       - name: Upload permanently signed release APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -1,6 +1,7 @@
 package com.angel.personalfolder.data
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.room.withTransaction
@@ -12,8 +13,6 @@ import androidx.work.workDataOf
 import com.angel.personalfolder.security.FileCrypto
 import com.angel.personalfolder.workers.OcrWorker
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.LocalDate
@@ -44,12 +43,13 @@ class FolderRepository(private val context: Context) {
 
     fun cases() = database.caseDao().observeAll()
     fun pendingReminders() = database.reminderDao().observePending()
+    fun allDocuments() = database.documentDao().observeAll()
     suspend fun document(id: String) = database.documentDao().getById(id)
     fun timeline(caseId: String) = database.timelineDao().observeForCase(caseId)
     fun checklist(caseId: String) = database.checklistDao().observeForCase(caseId)
     fun caseDocuments(caseId: String) = database.caseDocumentDao().observeDocumentsForCase(caseId)
 
-    suspend fun importUris(uris: List<Uri>): String? = importMutex.withLock { withContext(Dispatchers.IO) {
+    suspend fun importUris(uris: List<Uri>): String? = DataOperationCoordinator.withExclusive { withContext(Dispatchers.IO) {
         val distinctUris = uris.distinct()
         if (distinctUris.isEmpty()) return@withContext null
         require(distinctUris.size <= MAX_IMPORT_SOURCES) { "Μπορείς να εισαγάγεις έως $MAX_IMPORT_SOURCES σελίδες κάθε φορά." }
@@ -60,11 +60,17 @@ class FolderRepository(private val context: Context) {
         var firstName = "Έγγραφο"
         var firstMime = "application/octet-stream"
         var totalBytes = 0L
+        var databaseCommitted = false
         return@withContext try {
             distinctUris.forEachIndexed { index, uri ->
                 val name = safeDisplayName(uri) ?: "σελίδα_${index + 1}"
-                val mime = context.contentResolver.getType(uri).orEmpty().ifBlank { guessMime(name) }
-                require(mime == "application/pdf" || mime.startsWith("image/")) {
+                val reportedMime = context.contentResolver.getType(uri).orEmpty()
+                // Some document providers report every picked file as
+                // application/octet-stream. Use the extension only as a
+                // decoding hint; the PDF renderer/bitmap decoder below still
+                // validates the actual bytes before the Room commit.
+                val mime = ImportTypePolicy.resolveMime(reportedMime, name)
+                require(ImportTypePolicy.isSupported(mime)) {
                     "Ο τύπος αρχείου «$name» δεν υποστηρίζεται."
                 }
                 if (index == 0) {
@@ -76,6 +82,7 @@ class FolderRepository(private val context: Context) {
                 val target = File(documentDirectory, "page_$index.pf")
                 totalBytes += FileCrypto.encryptUri(context, uri, target)
                 require(totalBytes <= MAX_DOCUMENT_BYTES) { "Το έγγραφο είναι υπερβολικά μεγάλο συνολικά." }
+                if (mime.startsWith("image/")) validateEncryptedImage(target, name)
                 val pageCount = countEncryptedSourcePages(target, mime, name)
                 require(sourceCounts.sum() + pageCount <= MAX_LOGICAL_PAGES) { "Το έγγραφο περιέχει υπερβολικά πολλές σελίδες." }
                 pages += DocumentPageEntity(
@@ -106,10 +113,11 @@ class FolderRepository(private val context: Context) {
                 )
                 database.documentPageDao().insertAll(pages)
             }
+            databaseCommitted = true
             enqueueOcr(id)
             id
         } catch (error: Throwable) {
-            FileCrypto.deleteRecursively(documentDirectory)
+            if (!databaseCommitted) FileCrypto.deleteRecursively(documentDirectory)
             throw error
         }
     } }
@@ -122,40 +130,123 @@ class FolderRepository(private val context: Context) {
         provider: String,
         issuedDate: String?,
         expiryDate: String?,
-        protocolNumber: String?
+        protocolNumber: String?,
+        confirmedFields: MetadataFieldConfirmations? = null
     ) {
-        val cleanExpiry = expiryDate.cleanDateOrNull("Η ημερομηνία λήξης δεν είναι έγκυρη.")
-        val cleanIssued = issuedDate.cleanDateOrNull("Η ημερομηνία έκδοσης δεν είναι έγκυρη.")
-        database.documentDao().updateMetadata(
-            id = id,
-            title = title.trim().ifBlank { "Έγγραφο" },
-            category = category.trim().ifBlank { "Άλλα" },
-            tags = tags.trim(),
-            provider = provider.trim(),
-            issuedDate = cleanIssued,
-            expiryDate = cleanExpiry,
-            protocolNumber = protocolNumber?.trim()?.ifBlank { null },
-            updatedAt = System.currentTimeMillis()
-        )
-        ReminderScheduler.replaceForDocument(context, id, title.trim().ifBlank { "Έγγραφο" }, cleanExpiry)
+        DataOperationCoordinator.withExclusive {
+            val cleanTitle = title.trim().ifBlank { "Έγγραφο" }
+            val cleanCategory = category.trim().ifBlank { "Άλλα" }
+            val cleanTags = tags.trim()
+            val cleanProvider = provider.trim()
+            val cleanExpiry = expiryDate.cleanDateOrNull("Η ημερομηνία λήξης δεν είναι έγκυρη.")
+            val cleanIssued = issuedDate.cleanDateOrNull("Η ημερομηνία έκδοσης δεν είναι έγκυρη.")
+            val cleanProtocol = protocolNumber?.trim()?.ifBlank { null }
+            val current = database.documentDao().getById(id) ?: error("Το έγγραφο δεν βρέθηκε.")
+            val titleChanged = current.title != cleanTitle
+            val categoryChanged = current.category != cleanCategory
+            val providerChanged = current.provider != cleanProvider
+            val issuedChanged = current.issuedDate != cleanIssued
+            val expiryChanged = current.expiryDate != cleanExpiry
+            val protocolChanged = current.protocolNumber != cleanProtocol
+            val confirmed = confirmedFields?.let { requested ->
+                MetadataFieldChanges(
+                    title = requested.title || titleChanged,
+                    category = requested.category || categoryChanged,
+                    provider = requested.provider || providerChanged,
+                    issuedDate = requested.issuedDate || issuedChanged,
+                    expiryDate = requested.expiryDate || expiryChanged,
+                    protocolNumber = requested.protocolNumber || protocolChanged
+                )
+            } ?: MetadataFieldChanges(
+                titleChanged,
+                categoryChanged,
+                providerChanged,
+                issuedChanged,
+                expiryChanged,
+                protocolChanged
+            )
+            val ownership = MetadataOwnershipPolicy.merge(
+                current,
+                confirmed
+            )
+            database.documentDao().update(
+                current.copy(
+                    title = cleanTitle,
+                    category = cleanCategory,
+                    tags = cleanTags,
+                    provider = cleanProvider,
+                    issuedDate = cleanIssued,
+                    expiryDate = cleanExpiry,
+                    protocolNumber = cleanProtocol,
+                    metadataManuallyEdited = current.metadataManuallyEdited || ownership.any,
+                    expiryDateSuggestion = if (confirmed.expiryDate) null else current.expiryDateSuggestion,
+                    expiryDateSuggestionConfidence = if (confirmed.expiryDate) MetadataConfidence.NONE else current.expiryDateSuggestionConfidence,
+                    titleConfidence = if (confirmed.title) MetadataConfidence.MANUAL else current.titleConfidence,
+                    categoryConfidence = if (confirmed.category) MetadataConfidence.MANUAL else current.categoryConfidence,
+                    providerConfidence = if (confirmed.provider) MetadataConfidence.MANUAL else current.providerConfidence,
+                    issuedDateConfidence = if (confirmed.issuedDate) MetadataConfidence.MANUAL else current.issuedDateConfidence,
+                    expiryDateConfidence = if (confirmed.expiryDate) MetadataConfidence.MANUAL else current.expiryDateConfidence,
+                    protocolNumberConfidence = if (confirmed.protocolNumber) MetadataConfidence.MANUAL else current.protocolNumberConfidence,
+                    titleManuallyEdited = ownership.title,
+                    categoryManuallyEdited = ownership.category,
+                    providerManuallyEdited = ownership.provider,
+                    issuedDateManuallyEdited = ownership.issuedDate,
+                    expiryDateManuallyEdited = ownership.expiryDate,
+                    protocolNumberManuallyEdited = ownership.protocolNumber,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            ReminderScheduler.replaceForDocument(context, id, cleanTitle, cleanExpiry)
+        }
     }
 
     suspend fun retryOcr(id: String) {
-        require(database.documentDao().getById(id) != null) { "Το έγγραφο δεν βρέθηκε." }
-        enqueueOcr(id)
+        DataOperationCoordinator.withExclusive {
+            require(database.documentDao().getById(id) != null) { "Το έγγραφο δεν βρέθηκε." }
+            enqueueOcr(id)
+        }
     }
 
     suspend fun deleteDocument(id: String) {
-        database.documentDao().getById(id)
-        WorkManager.getInstance(context).cancelUniqueWork("ocr_$id")
-        ReminderScheduler.removeForDocument(context, id)
-        database.withTransaction {
-            database.caseDocumentDao().deleteForDocument(id)
-            database.reminderDao().deleteForDocument(id)
-            database.documentPageDao().deleteForDocument(id)
-            database.documentDao().deleteById(id)
+        DataOperationCoordinator.withExclusive {
+            require(database.documentDao().getById(id) != null) { "Το έγγραφο δεν βρέθηκε." }
+            WorkManager.getInstance(context).cancelUniqueWork("ocr_$id")
+            ReminderScheduler.removeForDocument(context, id)
+            val root = context.filesDir.resolve("documents/$id")
+            val quarantine = context.cacheDir.resolve("deleted_documents/${id}_${UUID.randomUUID()}")
+            var quarantined = false
+            var databaseCommitted = false
+            try {
+                if (root.exists()) {
+                    DocumentDeletionRecovery.writeJournal(context, id, root, quarantine, "prepared")
+                    quarantine.parentFile?.mkdirs()
+                    require(root.renameTo(quarantine)) { "Δεν ήταν δυνατή η προετοιμασία της διαγραφής." }
+                    quarantined = true
+                    DocumentDeletionRecovery.writeJournal(context, id, root, quarantine, "quarantined")
+                }
+                database.withTransaction {
+                    database.caseDocumentDao().deleteForDocument(id)
+                    database.reminderDao().deleteForDocument(id)
+                    database.documentPageDao().deleteForDocument(id)
+                    database.documentDao().deleteById(id)
+                }
+                databaseCommitted = true
+                if (quarantined) {
+                    DocumentDeletionRecovery.writeJournal(context, id, root, quarantine, "database_committed")
+                    FileCrypto.deleteRecursivelyStrict(quarantine)
+                    DocumentDeletionRecovery.clearJournal(context)
+                }
+            } catch (error: Throwable) {
+                if (!databaseCommitted && quarantined) {
+                    runCatching {
+                        require(!root.exists()) { "Το πρωτότυπο αρχείο δεν βρίσκεται στη σωστή θέση." }
+                        require(quarantine.renameTo(root)) { "Δεν ήταν δυνατή η ακύρωση της διαγραφής." }
+                        DocumentDeletionRecovery.clearJournal(context)
+                    }
+                }
+                throw error
+            }
         }
-        FileCrypto.deleteRecursively(context.filesDir.resolve("documents/$id"))
     }
 
     suspend fun createCase(title: String, description: String): String =
@@ -168,7 +259,7 @@ class FolderRepository(private val context: Context) {
         deadline: String?,
         nextStep: String,
         notes: String
-    ): String {
+    ): String = DataOperationCoordinator.withExclusive {
         val cleanTitle = title.trim().ifBlank { error("Η υπόθεση χρειάζεται τίτλο.") }
         val cleanStart = startDate.cleanDateOrNull("Η ημερομηνία έναρξης δεν είναι έγκυρη.")
         val cleanDeadline = deadline.cleanDateOrNull("Η προθεσμία δεν είναι έγκυρη.")
@@ -185,7 +276,7 @@ class FolderRepository(private val context: Context) {
             )
         }
         ReminderScheduler.replaceForCase(context, id, cleanTitle, cleanDeadline)
-        return id
+        id
     }
 
     suspend fun updateCase(
@@ -197,7 +288,10 @@ class FolderRepository(private val context: Context) {
         deadline: String?,
         nextStep: String,
         notes: String
-    ) {
+    ) = DataOperationCoordinator.withExclusive {
+        // PF-018 remains a product decision: status changes do not silently
+        // alter reminder semantics until the product specifies whether
+        // COMPLETED cases should retain deadlines/reminders.
         val cleanTitle = title.trim().ifBlank { error("Η υπόθεση χρειάζεται τίτλο.") }
         val cleanStart = startDate.cleanDateOrNull("Η ημερομηνία έναρξης δεν είναι έγκυρη.")
         val cleanDeadline = deadline.cleanDateOrNull("Η προθεσμία δεν είναι έγκυρη.")
@@ -205,12 +299,14 @@ class FolderRepository(private val context: Context) {
         ReminderScheduler.replaceForCase(context, id, cleanTitle, cleanDeadline)
     }
 
-    suspend fun deleteCase(id: String) {
+    suspend fun deleteCase(id: String) = DataOperationCoordinator.withExclusive {
         ReminderScheduler.removeForCase(context, id)
         database.caseDao().deleteById(id)
     }
 
-    suspend fun updateCaseStatus(id: String, status: String) {
+    suspend fun updateCaseStatus(id: String, status: String) = DataOperationCoordinator.withExclusive {
+        // Keep COMPLETED reminder behavior unchanged until PF-018 is decided;
+        // ARCHIVED is only a display status at present.
         database.caseDao().updateStatus(id, status, System.currentTimeMillis())
         database.timelineDao().insert(
             TimelineEventEntity(
@@ -221,7 +317,7 @@ class FolderRepository(private val context: Context) {
         )
     }
 
-    suspend fun attachDocumentToCase(caseId: String, documentId: String) {
+    suspend fun attachDocumentToCase(caseId: String, documentId: String) = DataOperationCoordinator.withExclusive {
         require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
         require(database.documentDao().getById(documentId) != null) { "Το έγγραφο δεν βρέθηκε." }
         database.caseDocumentDao().insert(CaseDocumentCrossRef(caseId, documentId))
@@ -230,9 +326,11 @@ class FolderRepository(private val context: Context) {
         }
     }
 
-    suspend fun detachDocumentFromCase(caseId: String, documentId: String) = database.caseDocumentDao().delete(caseId, documentId)
+    suspend fun detachDocumentFromCase(caseId: String, documentId: String) = DataOperationCoordinator.withExclusive {
+        database.caseDocumentDao().delete(caseId, documentId)
+    }
 
-    suspend fun addTimelineEvent(caseId: String, title: String, note: String) {
+    suspend fun addTimelineEvent(caseId: String, title: String, note: String) = DataOperationCoordinator.withExclusive {
         require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
         database.timelineDao().insert(
             TimelineEventEntity(
@@ -242,16 +340,28 @@ class FolderRepository(private val context: Context) {
         )
     }
 
-    suspend fun addChecklistItem(caseId: String, title: String, linkedDocumentId: String? = null) {
+    suspend fun addChecklistItem(caseId: String, title: String, linkedDocumentId: String? = null) = DataOperationCoordinator.withExclusive {
         require(database.caseDao().getById(caseId) != null) { "Η υπόθεση δεν βρέθηκε." }
         if (linkedDocumentId != null) require(database.documentDao().getById(linkedDocumentId) != null) { "Το έγγραφο δεν βρέθηκε." }
         database.checklistDao().insert(ChecklistItemEntity(UUID.randomUUID().toString(), caseId, title.trim(), linkedDocumentId = linkedDocumentId, createdAt = System.currentTimeMillis()))
     }
 
-    suspend fun setChecklistComplete(id: String, complete: Boolean) = database.checklistDao().setComplete(id, complete)
-    suspend fun linkChecklistDocument(id: String, documentId: String?) = database.checklistDao().linkDocument(id, documentId)
-    suspend fun deleteChecklistItem(id: String) = database.checklistDao().deleteById(id)
-    suspend fun markReminderDone(id: String) = database.reminderDao().markDone(id)
+    suspend fun setChecklistComplete(id: String, complete: Boolean) = DataOperationCoordinator.withExclusive {
+        database.checklistDao().setComplete(id, complete)
+    }
+
+    suspend fun linkChecklistDocument(id: String, documentId: String?) = DataOperationCoordinator.withExclusive {
+        if (documentId != null) require(database.documentDao().getById(documentId) != null) { "Το έγγραφο δεν βρέθηκε." }
+        database.checklistDao().linkDocument(id, documentId)
+    }
+
+    suspend fun deleteChecklistItem(id: String) = DataOperationCoordinator.withExclusive {
+        database.checklistDao().deleteById(id)
+    }
+
+    suspend fun markReminderDone(id: String) = DataOperationCoordinator.withExclusive {
+        database.reminderDao().markDone(id)
+    }
 
     private suspend fun enqueueOcr(id: String) {
         val request = OneTimeWorkRequestBuilder<OcrWorker>()
@@ -275,6 +385,21 @@ class FolderRepository(private val context: Context) {
         }
     }
 
+    private fun validateEncryptedImage(encrypted: File, name: String) {
+        val temp = File(context.cacheDir, "ocr/import_${UUID.randomUUID()}.image.tmp").apply { parentFile?.mkdirs() }
+        try {
+            FileCrypto.decryptToTemp(encrypted, temp)
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(temp.absolutePath, bounds)
+            require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Η εικόνα «$name» δεν αποκωδικοποιείται." }
+            val bitmap = BitmapFactory.decodeFile(temp.absolutePath)
+                ?: error("Η εικόνα «$name» δεν αποκωδικοποιείται.")
+            bitmap.recycle()
+        } finally {
+            temp.delete()
+        }
+    }
+
     private fun safeDisplayName(uri: Uri): String? = runCatching {
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getString(0)?.take(180)
@@ -287,15 +412,6 @@ class FolderRepository(private val context: Context) {
             if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
         }
     }.getOrNull()
-
-    private fun guessMime(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-        "pdf" -> "application/pdf"
-        "jpg", "jpeg" -> "image/jpeg"
-        "png" -> "image/png"
-        "webp" -> "image/webp"
-        "heic", "heif" -> "image/heic"
-        else -> "application/octet-stream"
-    }
 
     private fun String?.cleanDateOrNull(error: String): String? {
         val value = this?.trim().orEmpty()
@@ -317,7 +433,6 @@ class FolderRepository(private val context: Context) {
     }
 
     private companion object {
-        val importMutex = Mutex()
         const val MAX_IMPORT_SOURCES = 100
         const val MAX_DOCUMENT_BYTES = 512L * 1024 * 1024
         const val MAX_TOTAL_STORAGE_BYTES = 2L * 1024 * 1024 * 1024

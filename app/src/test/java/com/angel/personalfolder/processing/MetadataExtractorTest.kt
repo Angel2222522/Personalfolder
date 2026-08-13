@@ -51,14 +51,92 @@ class MetadataExtractorTest {
     fun doesNotInventExpiryFromOneUnlabelledDate() {
         val result = MetadataExtractor.extract("Αριθμός αίτησης 12345\n03/08/2026", "Έγγραφο")
         assertEquals(null, result.expiryDate)
+        assertEquals("2026-08-03", result.issuedDate)
         assertEquals("low", result.issuedConfidence)
         assertTrue(result.json.contains("\"expiryConfidence\":\"none\""))
     }
 
     @Test
-    fun marksLastDateFallbackAsLowConfidence() {
+    fun doesNotInventExpiryFromASecondUnlabelledDate() {
         val result = MetadataExtractor.extract("Εκδόθηκε 01/01/2024\nΑναφορά 02/02/2025", "Έγγραφο")
-        assertEquals("2025-02-02", result.expiryDate)
-        assertEquals("low", result.expiryConfidence)
+        assertEquals("2024-01-01", result.issuedDate)
+        assertEquals(null, result.expiryDate)
+        assertEquals("none", result.expiryConfidence)
+        assertTrue(result.json.contains("\"expiryProvenance\":\"none\""))
+    }
+
+    @Test
+    fun doesNotReuseIssuedDateAsExpiryWhenValidityWordsAreNearby() {
+        val result = MetadataExtractor.extract(
+            "Ημερομηνία έκδοσης: 03/08/2026\nΗ παρούσα βεβαίωση ισχύει για κάθε νόμιμη χρήση.",
+            "Έγγραφο"
+        )
+        assertEquals("2026-08-03", result.issuedDate)
+        assertEquals(null, result.expiryDate)
+        assertEquals("none", result.expiryConfidence)
+    }
+
+    @Test
+    fun recognizesCreationDateWithoutInventingExpiry() {
+        val result = MetadataExtractor.extract(
+            "Ημερομηνία δημιουργίας: 03/08/2026\nΗ παρούσα βεβαίωση ισχύει για κάθε νόμιμη χρήση.",
+            "Έγγραφο"
+        )
+        assertEquals("2026-08-03", result.issuedDate)
+        assertEquals("high", result.issuedConfidence)
+        assertEquals(null, result.expiryDate)
+    }
+
+    @Test
+    fun acceptsOnlyProtocolLabelsAndKeepsTheWholeValue() {
+        val validLabels = listOf(
+            "Αριθμός μητρώου: 12345",
+            "Αρ. Πρωτ.: 12345/2026",
+            "Αρ. Πρωτοκόλλου: ΑΒ-123/7",
+            "Αριθμός πρωτοκόλλου: 991"
+        )
+        assertEquals(null, MetadataExtractor.extract(validLabels.first(), "Έγγραφο").protocolNumber)
+        assertEquals("12345/2026", MetadataExtractor.extract(validLabels[1], "Έγγραφο").protocolNumber)
+        assertEquals("αβ-123/7", MetadataExtractor.extract(validLabels[2], "Έγγραφο").protocolNumber)
+        assertEquals("991", MetadataExtractor.extract(validLabels[3], "Έγγραφο").protocolNumber)
+    }
+
+    @Test
+    fun acceptsProtocolLabelVariantsOnlyAtTheStartOfTheirLine() {
+        assertEquals("12345/2026", MetadataExtractor.extract("Αρ Πρωτ: 12345/2026", "Έγγραφο").protocolNumber)
+        assertEquals("ab-7", MetadataExtractor.extract("Protocol No.: AB-7", "Έγγραφο").protocolNumber)
+        assertEquals(null, MetadataExtractor.extract("Σχόλιο: Αριθμός πρωτοκόλλου: 12345", "Έγγραφο").protocolNumber)
+        assertEquals(null, MetadataExtractor.extract("application number: 12345", "Έγγραφο").protocolNumber)
+    }
+
+    @Test
+    fun carriesConfidenceAndProvenanceForProviderAndProtocol() {
+        val result = MetadataExtractor.extract(
+            "Ελληνική Δημοκρατία\nΥπουργείο Παιδείας\nΑρ. Πρωτ.: 12345/2026",
+            "Έγγραφο"
+        )
+        assertEquals("Υπουργείο Παιδείας", result.provider)
+        assertEquals("high", result.providerConfidence)
+        assertEquals("12345/2026", result.protocolNumber)
+        assertEquals("high", result.protocolConfidence)
+        assertTrue(result.json.contains("\"providerProvenance\":\"issuer-marker:"))
+        assertTrue(result.json.contains("\"protocolProvenance\":\"protocol-label\""))
+    }
+
+    @Test
+    fun prefersSpecificIssuingAuthorityOverGenericStateHeading() {
+        val result = MetadataExtractor.extract(
+            "Ελληνική Δημοκρατία\nΥπουργείο Παιδείας\nΔιεύθυνση Διοικητικού",
+            "Έγγραφο"
+        )
+        assertEquals("Υπουργείο Παιδείας", result.provider)
+        assertTrue(result.providerConfidence == "high" || result.providerConfidence == "medium")
+    }
+
+    @Test
+    fun usesUiCategoriesAndSpecificEmploymentRule() {
+        val result = MetadataExtractor.extract("Σύμβαση εργασίας\nΕργοδότης", "Έγγραφο")
+        assertEquals("Εργασία", result.category)
+        assertTrue(result.categoryConfidence == "high" || result.categoryConfidence == "medium")
     }
 }

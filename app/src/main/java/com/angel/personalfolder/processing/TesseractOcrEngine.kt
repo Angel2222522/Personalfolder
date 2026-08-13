@@ -27,29 +27,56 @@ class TesseractOcrEngine(private val context: Context) {
     private suspend fun prepareDataPath(): File = modelLock.withLock {
         val root = File(context.filesDir, "tesseract").apply { mkdirs() }
         val tessdata = File(root, "tessdata").apply { mkdirs() }
-        context.assets.list("tessdata").orEmpty().forEach { name ->
-            require(name.endsWith(".traineddata")) { "Μη έγκυρο αρχείο OCR." }
+        val versionFile = File(root, ".model-version")
+        val installedVersion = runCatching { versionFile.readText() }.getOrNull()
+
+        if (installedVersion != MODEL_BUNDLE_VERSION) {
+            File(tessdata, "ell.traineddata").delete()
+            File(tessdata, "eng.traineddata").delete()
+            versionFile.delete()
+        }
+
+        val bundledModels = context.assets.list("tessdata").orEmpty().toSet()
+        require(bundledModels.containsAll(REQUIRED_MODELS)) {
+            "Λείπουν τα ελληνικά ή αγγλικά δεδομένα OCR."
+        }
+
+        for (name in REQUIRED_MODELS) {
             val destination = File(tessdata, name)
             if (!destination.exists() || destination.length() < MIN_TRAINEDDATA_BYTES) {
                 val temporary = File(tessdata, ".${name}.${System.nanoTime()}.part")
                 try {
-                    context.assets.open("tessdata/$name").use { input -> temporary.outputStream().use(input::copyTo) }
-                    require(temporary.length() >= MIN_TRAINEDDATA_BYTES) { "Το αρχείο OCR είναι ελλιπές: $name" }
-                    require(temporary.renameTo(destination)) { "Δεν ήταν δυνατή η εγκατάσταση του αρχείου OCR: $name" }
+                    context.assets.open("tessdata/$name").use { input ->
+                        temporary.outputStream().use(input::copyTo)
+                    }
+                    require(temporary.length() >= MIN_TRAINEDDATA_BYTES) {
+                        "Το αρχείο OCR είναι ελλιπές: $name"
+                    }
+                    if (destination.exists()) {
+                        require(destination.delete()) {
+                            "Δεν ήταν δυνατή η αντικατάσταση του αρχείου OCR: $name"
+                        }
+                    }
+                    require(temporary.renameTo(destination)) {
+                        "Δεν ήταν δυνατή η εγκατάσταση του αρχείου OCR: $name"
+                    }
                 } finally {
                     temporary.delete()
                 }
             }
-            require(destination.length() >= MIN_TRAINEDDATA_BYTES) { "Το αρχείο OCR είναι ελλιπές: $name" }
+            require(destination.length() >= MIN_TRAINEDDATA_BYTES) {
+                "Το αρχείο OCR είναι ελλιπές: $name"
+            }
         }
-        require(File(tessdata, "ell.traineddata").isFile && File(tessdata, "eng.traineddata").isFile) {
-            "Λείπουν τα ελληνικά ή αγγλικά δεδομένα OCR."
-        }
+
+        versionFile.writeText(MODEL_BUNDLE_VERSION)
         root
     }
 
     private companion object {
         val modelLock = Mutex()
-        const val MIN_TRAINEDDATA_BYTES = 100_000L
+        val REQUIRED_MODELS = setOf("ell.traineddata", "eng.traineddata")
+        const val MODEL_BUNDLE_VERSION = "tessdata-fast-87416418657359cb"
+        const val MIN_TRAINEDDATA_BYTES = 1_000_000L
     }
 }
