@@ -87,4 +87,44 @@ class MetadataEvidenceRefinerTest {
         assertEquals("medium", refined.protocolConfidence)
         assertEquals("protocol-stacked-field", refined.protocolProvenance)
     }
+
+    @Test
+    fun genericRegistryIssuerUsesSpecificUppercaseOfficeQualifierFromFlattenedHeader() {
+        val text = """
+            ΕΛΛΗΝΙΚΗ ΔΗΜΟΚΡΑΤΙΑ
+            ΝΟΜΟΣ
+            ΔΗΜΟΣ
+            ΛΗΞΙΑΡΧΕΙΟ
+            Δ/ΝΣΗ
+            Τηλέφωνο
+            Ληξιαρχική Πράξη Γέννησης
+            Περιφέρειας
+            Δείγματος
+            ΔΟΚΙΜΑΣΤΙΚΟΥ
+            Οδός Δοκιμής 1
+        """.trimIndent()
+        val raw = MetadataExtractor.extract(text, "synthetic-registry.pdf")
+
+        assertEquals("ΛΗΞΙΑΡΧΕΙΟ", raw.provider)
+
+        val refined = MetadataEvidenceRefiner.refine(raw, text)
+
+        assertEquals("ΛΗΞΙΑΡΧΕΙΟ ΔΟΚΙΜΑΣΤΙΚΟΥ", refined.provider)
+        assertEquals("high", refined.providerConfidence)
+        assertEquals("registry-office-layout", refined.providerProvenance)
+    }
+
+    @Test
+    fun alreadySpecificRegistryIssuerIsNotExpandedAgain() {
+        val text = """
+            ΛΗΞΙΑΡΧΕΙΟ ΔΟΚΙΜΗΣ
+            Ληξιαρχική Πράξη Γέννησης
+            ΑΛΛΗ ΠΕΡΙΟΧΗ
+        """.trimIndent()
+        val raw = MetadataExtractor.extract(text, "synthetic-registry.pdf")
+
+        val refined = MetadataEvidenceRefiner.refine(raw, text)
+
+        assertEquals("ΛΗΞΙΑΡΧΕΙΟ ΔΟΚΙΜΗΣ", refined.provider)
+    }
 }

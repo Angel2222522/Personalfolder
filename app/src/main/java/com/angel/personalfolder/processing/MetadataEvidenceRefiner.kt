@@ -75,13 +75,29 @@ object MetadataEvidenceRefiner {
             metadata.protocolProvenance
         }
 
+        // Some registry exports flatten a header table into separate labels and
+        // values, leaving the raw issuer as only "ΛΗΞΙΑΡΧΕΙΟ". In that narrow
+        // case, recover a nearby all-uppercase office qualifier after the birth
+        // record heading. This is structural evidence, not a place-name list.
+        val registryQualifier = if (fold(metadata.provider).trim() == "ληξιαρχειο") {
+            extractRegistryOfficeQualifier(evidence, metadata.title)
+        } else {
+            null
+        }
+        val provider = registryQualifier?.let { "${metadata.provider.trim()} $it" } ?: metadata.provider
+        val providerConfidence = if (registryQualifier != null) MetadataConfidence.HIGH else metadata.providerConfidence
+        val providerProvenance = if (registryQualifier != null) "registry-office-layout" else metadata.providerProvenance
+
         val refined = metadata.copy(
+            provider = provider,
             issuedDate = issuedDate,
             expiryDate = expiryDate,
             protocolNumber = protocolNumber,
+            providerConfidence = providerConfidence,
             issuedConfidence = issuedConfidence,
             expiryConfidence = expiryConfidence,
             protocolConfidence = protocolConfidence,
+            providerProvenance = providerProvenance,
             issuedProvenance = issuedProvenance,
             expiryProvenance = expiryProvenance,
             protocolProvenance = protocolProvenance
@@ -117,6 +133,34 @@ object MetadataEvidenceRefiner {
             }
         }
         return null
+    }
+
+    private fun extractRegistryOfficeQualifier(text: String, title: String): String? {
+        val lines = text.lines().map(String::trim).filter { it.length >= 2 }
+        if (lines.isEmpty()) return null
+        val foldedTitle = fold(title)
+        val titleIndex = lines.indexOfFirst { line ->
+            val foldedLine = fold(line)
+            foldedLine.contains("ληξιαρχικη πραξη γεννησης") ||
+                (foldedTitle.isNotBlank() && foldedLine == foldedTitle)
+        }
+        if (titleIndex < 0) return null
+        return lines.asSequence()
+            .drop(titleIndex + 1)
+            .take(MAX_REGISTRY_QUALIFIER_LOOKAHEAD)
+            .firstOrNull(::isRegistryOfficeQualifier)
+    }
+
+    private fun isRegistryOfficeQualifier(value: String): Boolean {
+        if (value.length !in MIN_REGISTRY_QUALIFIER_LENGTH..MAX_REGISTRY_QUALIFIER_LENGTH) return false
+        if (value.any(Char::isDigit) || ':' in value || '/' in value || '@' in value) return false
+        val letters = value.filter(Char::isLetter)
+        if (letters.length < MIN_REGISTRY_QUALIFIER_LETTERS) return false
+        val uppercaseRatio = letters.count(Char::isUpperCase).toDouble() / letters.length
+        if (uppercaseRatio < MIN_REGISTRY_UPPERCASE_RATIO) return false
+        val folded = fold(value)
+        if (REGISTRY_QUALIFIER_NOISE.any(folded::contains)) return false
+        return true
     }
 
     private fun normalizeProtocolCandidate(raw: String): String? {
@@ -229,10 +273,28 @@ object MetadataEvidenceRefiner {
         "application",
         "request"
     )
+    private val REGISTRY_QUALIFIER_NOISE = listOf(
+        "στοιχεια",
+        "χαρακτηριστικο",
+        "κωδικος",
+        "τηλεφωνο",
+        "σελιδα",
+        "ελληνικη δημοκρατια",
+        "ληξιαρχειο",
+        "δημος",
+        "νομος",
+        "διευθυνση",
+        "δ/νση"
+    )
 
     private const val TWO_DIGIT_YEAR_PIVOT = 69
     private const val MAX_REFINEMENT_EVIDENCE_CHARS = 16_000
     private const val MAX_STACKED_PROTOCOL_LOOKAHEAD = 10
     private const val MIN_PROTOCOL_LENGTH = 3
     private const val MAX_PROTOCOL_LENGTH = 80
+    private const val MAX_REGISTRY_QUALIFIER_LOOKAHEAD = 10
+    private const val MIN_REGISTRY_QUALIFIER_LENGTH = 3
+    private const val MAX_REGISTRY_QUALIFIER_LENGTH = 50
+    private const val MIN_REGISTRY_QUALIFIER_LETTERS = 3
+    private const val MIN_REGISTRY_UPPERCASE_RATIO = 0.75
 }
