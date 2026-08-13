@@ -2,7 +2,7 @@ name: Android build and tests
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, codex/personal-folder-audit-remediation ]
   pull_request:
     branches: [ main ]
 
@@ -24,8 +24,6 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.11.1'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -34,16 +32,16 @@ jobs:
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "platforms;android-28" "system-images;android-28;default;x86"
 
       - name: Run unit tests
-        run: gradle testDebugUnitTest
+        run: ./gradlew testDebugUnitTest
 
       - name: Run lint
-        run: gradle lintDebug
+        run: ./gradlew lintDebug
 
       - name: Compile instrumentation tests
-        run: gradle assembleDebugAndroidTest
+        run: ./gradlew assembleDebugAndroidTest
 
       - name: Build debug APK
-        run: gradle assembleDebug
+        run: ./gradlew assembleDebug
 
       - name: Upload OCR-fix debug APK early
         uses: actions/upload-artifact@v4
@@ -76,7 +74,7 @@ jobs:
           # so a successful Gradle test run cannot turn into `exit: Illegal
           # number`, while a real test failure still fails the job.
           script: >-
-            sh -c 'set +e; gradle connectedDebugAndroidTest --stacktrace; status=$?; adb logcat -d -b all -v threadtime > "$RUNNER_TEMP/personal-folder-instrumentation-logcat.txt" || true; echo "--- Recent device logcat after instrumentation failure ---"; tail -n 400 "$RUNNER_TEMP/personal-folder-instrumentation-logcat.txt" || true; exit "$status"'
+            sh -c 'set +e; ./gradlew connectedDebugAndroidTest --stacktrace; status=$?; adb logcat -d -b all -v threadtime > "$RUNNER_TEMP/personal-folder-instrumentation-logcat.txt" || true; echo "--- Recent device logcat after instrumentation failure ---"; tail -n 400 "$RUNNER_TEMP/personal-folder-instrumentation-logcat.txt" || true; exit "$status"'
 
       - name: Upload debug APK
         if: always()
@@ -97,8 +95,8 @@ jobs:
           if-no-files-found: ignore
 
       - name: Verify unsigned release compilation on pull requests
-        if: github.event_name == 'pull_request'
-        run: gradle assembleRelease
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/codex/personal-folder-audit-remediation'
+        run: ./gradlew assembleRelease
 
       - name: Prepare permanent release signing
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -111,7 +109,7 @@ jobs:
 
       - name: Build permanently signed release APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: gradle assembleRelease
+        run: ./gradlew assembleRelease
 
       - name: Verify permanent release signature
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

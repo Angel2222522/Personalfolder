@@ -91,7 +91,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.angel.personalfolder.data.CaseEntity
 import com.angel.personalfolder.data.CaseStatus
 import com.angel.personalfolder.data.ChecklistItemEntity
+import com.angel.personalfolder.data.DataOperationCoordinator
 import com.angel.personalfolder.data.DocumentEntity
+import com.angel.personalfolder.data.DocumentSummary
 import com.angel.personalfolder.data.DocumentSelectionPolicy
 import com.angel.personalfolder.data.MetadataConfidence
 import com.angel.personalfolder.data.MetadataFieldConfirmations
@@ -101,6 +103,7 @@ import java.time.LocalDate
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.flow.flowOf
 
 private enum class MainSection { HOME, DOCUMENTS, CASES, SETTINGS }
 
@@ -138,6 +141,7 @@ fun FolderApp(
     val expiringSoon by viewModel.expiringSoon.collectAsStateWithLifecycle()
     val busy by viewModel.busy.collectAsStateWithLifecycle()
     val reminders by viewModel.pendingReminders.collectAsStateWithLifecycle()
+    val recoveryState by DataOperationCoordinator.recoveryState.collectAsStateWithLifecycle()
     var section by rememberSaveable { mutableStateOf(MainSection.HOME.name) }
     var selectedDocumentId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedCaseId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -147,6 +151,27 @@ fun FolderApp(
 
     LaunchedEffect(Unit) {
         viewModel.messages.collect { snackbar.showSnackbar(it) }
+    }
+
+    LaunchedEffect(selectedDocumentId, allDocuments) {
+        if (selectedDocumentId != null && allDocuments.none { it.id == selectedDocumentId }) {
+            selectedDocumentId = null
+        }
+    }
+    LaunchedEffect(selectedCaseId, cases) {
+        if (selectedCaseId != null && cases.none { it.id == selectedCaseId }) {
+            selectedCaseId = null
+        }
+    }
+
+    val selectedDocumentFlow = remember(selectedDocumentId) {
+        selectedDocumentId?.let(viewModel::documentFlow) ?: flowOf<DocumentEntity?>(null)
+    }
+    val selectedDocument by selectedDocumentFlow.collectAsStateWithLifecycle(initialValue = null)
+
+    if (recoveryState != DataOperationCoordinator.StartupRecoveryState.SAFE) {
+        StartupRecoveryBlockedScreen(recoveryState, DataOperationCoordinator.recoveryMessage())
+        return
     }
 
     if (locked) {
@@ -191,8 +216,11 @@ fun FolderApp(
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
                 selectedDocumentId != null -> {
-                    val document = allDocuments.firstOrNull { it.id == selectedDocumentId }
-                    if (document != null) DocumentDetailScreen(document, viewModel, onOpenDocument, onShareDocument, onBack = { selectedDocumentId = null })
+                    if (selectedDocument != null) {
+                        DocumentDetailScreen(selectedDocument!!, viewModel, onOpenDocument, onShareDocument, onBack = { selectedDocumentId = null })
+                    } else {
+                        EmptyState("Το έγγραφο δεν είναι πλέον διαθέσιμο.", Icons.Default.Description)
+                    }
                 }
                 selectedCaseId != null -> {
                     val caseEntity = cases.firstOrNull { it.id == selectedCaseId }
@@ -234,6 +262,7 @@ fun FolderApp(
                 PasswordDialog(
                     title = if (action == "create") "Δημιουργία αντιγράφου" else "Επαναφορά αντιγράφου",
                     minimumLength = if (action == "create") 12 else 8,
+                    confirmPassword = action == "create",
                     onDismiss = { backupAction = null },
                     onConfirm = { password ->
                         backupAction = null
@@ -256,7 +285,7 @@ fun FolderApp(
 
 @Composable
 private fun HomeScreen(
-    documents: List<DocumentEntity>,
+    documents: List<DocumentSummary>,
     cases: List<CaseEntity>,
     reminders: List<ReminderEntity>,
     onImport: () -> Unit,
@@ -304,8 +333,8 @@ private fun HomeScreen(
             }
         }
         if (reminders.isNotEmpty()) {
-            item { SectionHeader("Υπενθυμίσεις", Icons.Default.CalendarMonth, {}) }
-            items(reminders.take(3), key = { it.id }) { reminder ->
+            item { SectionHeader("Υπενθυμίσεις", Icons.Default.CalendarMonth) }
+            items(reminders, key = { it.id }) { reminder ->
                 ReminderCard(reminder, onDone = { onReminderDone(reminder.id) })
             }
         }
@@ -326,7 +355,7 @@ private fun HomeScreen(
 
 @Composable
 private fun DocumentsScreen(
-    documents: List<DocumentEntity>,
+    documents: List<DocumentSummary>,
     cases: List<CaseEntity>,
     query: String,
     category: String,
@@ -470,7 +499,7 @@ private fun DocumentDetailScreen(document: DocumentEntity, viewModel: FolderView
 }
 
 @Composable
-private fun CaseDetailScreen(caseEntity: CaseEntity, documents: List<DocumentEntity>, viewModel: FolderViewModel, onOpenDocument: (String) -> Unit) {
+private fun CaseDetailScreen(caseEntity: CaseEntity, documents: List<DocumentSummary>, viewModel: FolderViewModel, onOpenDocument: (String) -> Unit) {
     val timeline by viewModel.timeline(caseEntity.id).collectAsState(initial = emptyList())
     val checklist by viewModel.checklist(caseEntity.id).collectAsState(initial = emptyList())
     val attachedDocuments by viewModel.caseDocuments(caseEntity.id).collectAsState(initial = emptyList())
@@ -529,7 +558,12 @@ private fun CaseDetailScreen(caseEntity: CaseEntity, documents: List<DocumentEnt
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) { Text("Λίστα δικαιολογητικών", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold); IconButton(onClick = { addItem = true }) { Icon(Icons.Default.Add, "Προσθήκη") } }
             if (checklist.isEmpty()) Text("Δεν έχεις προσθέσει στοιχεία.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             else for (checkItem in checklist) {
-                ChecklistRow(checkItem, documents.firstOrNull { it.id == checkItem.linkedDocumentId }) { complete -> viewModel.setChecklistComplete(checkItem, complete) }
+                ChecklistRow(
+                    item = checkItem,
+                    linkedDocument = documents.firstOrNull { it.id == checkItem.linkedDocumentId },
+                    onChecked = { complete -> viewModel.setChecklistComplete(checkItem, complete) },
+                    onDelete = { viewModel.deleteChecklistItem(checkItem) }
+                )
             }
         }
         item {
@@ -604,10 +638,18 @@ private fun <T> FilterMenuChip(label: String, selectedLabel: String, options: Li
 }
 
 @Composable
-private fun SectionHeader(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) { Row(Modifier.fillMaxWidth().clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(8.dp)); Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)); Icon(Icons.Default.ArrowForward, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) } }
+private fun SectionHeader(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: (() -> Unit)? = null) {
+    val modifier = if (onClick != null) Modifier.fillMaxWidth().clickable(onClick = onClick) else Modifier.fillMaxWidth()
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(8.dp))
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        if (onClick != null) Icon(Icons.Default.ArrowForward, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
 
 @Composable
-private fun DocumentCard(document: DocumentEntity, onClick: () -> Unit, selected: Boolean = false, onToggleSelection: (() -> Unit)? = null) { Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Surface(Modifier.size(44.dp), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Description, null, tint = MaterialTheme.colorScheme.onPrimaryContainer) } }; Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(document.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(document.category, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp); if (document.processingState == ProcessingState.PROCESSING) Text("Γίνεται επεξεργασία…", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp) }; document.expiryDate?.takeIf { MetadataConfidence.isConfirmed(it, document.expiryDateConfidence, document.expiryDateManuallyEdited) }?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }; onToggleSelection?.let { toggle -> androidx.compose.material3.Checkbox(checked = selected, onCheckedChange = { toggle() }) } } } }
+private fun DocumentCard(document: DocumentSummary, onClick: () -> Unit, selected: Boolean = false, onToggleSelection: (() -> Unit)? = null) { Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Surface(Modifier.size(44.dp), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Description, null, tint = MaterialTheme.colorScheme.onPrimaryContainer) } }; Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(document.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(document.category, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp); if (document.processingState == ProcessingState.PROCESSING) Text("Γίνεται επεξεργασία…", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp) }; document.expiryDate?.takeIf { MetadataConfidence.isConfirmed(it, document.expiryDateConfidence, document.expiryDateManuallyEdited) }?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }; onToggleSelection?.let { toggle -> androidx.compose.material3.Checkbox(checked = selected, onCheckedChange = { toggle() }) } } } }
 
 @Composable
 private fun CaseCard(caseEntity: CaseEntity, onClick: () -> Unit) { Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Assignment, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(caseEntity.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(caseEntity.nextStep.ifBlank { caseEntity.description.ifBlank { "Χωρίς επόμενο βήμα" } }, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }; AssistChip(onClick = {}, label = { Text(caseEntity.status, fontSize = 11.sp) }) } } }
@@ -645,6 +687,36 @@ private fun LockedScreen() {
 }
 
 @Composable
+private fun StartupRecoveryBlockedScreen(
+    state: DataOperationCoordinator.StartupRecoveryState,
+    message: String
+) {
+    Surface(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.fillMaxSize().padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(Icons.Default.WarningAmber, null, modifier = Modifier.size(56.dp), tint = MaterialTheme.colorScheme.error)
+            Spacer(Modifier.height(16.dp))
+            Text(
+                if (state == DataOperationCoordinator.StartupRecoveryState.IN_PROGRESS) "Γίνεται ασφαλής ανάκτηση"
+                else "Η βιβλιοθήκη παραμένει κλειδωμένη",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                if (state == DataOperationCoordinator.StartupRecoveryState.IN_PROGRESS)
+                    "Περίμενε να ολοκληρωθεί ο έλεγχος πριν αλλάξεις δεδομένα."
+                else message,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
+    }
+}
+
+@Composable
 private fun ReminderCard(reminder: ReminderEntity, onDone: () -> Unit) {
     val deadline = remember(reminder.deadlineAt, reminder.dueAt, reminder.leadDays) {
         Instant.ofEpochMilli(reminder.deadlineAt.takeIf { it > 0L } ?: (reminder.dueAt + reminder.leadDays * 86_400_000L))
@@ -671,13 +743,14 @@ private fun ReminderCard(reminder: ReminderEntity, onDone: () -> Unit) {
 private fun LinearProcessing() { androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp)) }
 
 @Composable
-private fun ChecklistRow(item: ChecklistItemEntity, linkedDocument: DocumentEntity?, onChecked: (Boolean) -> Unit) {
+private fun ChecklistRow(item: ChecklistItemEntity, linkedDocument: DocumentSummary?, onChecked: (Boolean) -> Unit, onDelete: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         androidx.compose.material3.Checkbox(checked = item.isComplete, onCheckedChange = onChecked)
         Column(Modifier.weight(1f)) {
             Text(item.title, color = if (item.isComplete) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
             linkedDocument?.let { Text("Έγγραφο: ${it.title}", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
+        IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Διαγραφή") }
     }
 }
 
@@ -749,7 +822,7 @@ private fun CaseEditDialog(
 }
 
 @Composable
-private fun AttachDocumentDialog(documents: List<DocumentEntity>, onDismiss: () -> Unit, onAttach: (String) -> Unit) {
+private fun AttachDocumentDialog(documents: List<DocumentSummary>, onDismiss: () -> Unit, onAttach: (String) -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Σύνδεση εγγράφου") },
@@ -769,7 +842,7 @@ private fun AttachDocumentDialog(documents: List<DocumentEntity>, onDismiss: () 
 
 @Composable
 private fun ChecklistDialog(
-    documents: List<DocumentEntity>,
+    documents: List<DocumentSummary>,
     onDismiss: () -> Unit,
     onSave: (String, String?) -> Unit
 ) {
@@ -799,19 +872,19 @@ private fun ChecklistDialog(
 
 @Composable
 private fun DocumentEditDialog(document: DocumentEntity, viewModel: FolderViewModel, onDismiss: () -> Unit) {
-    var title by remember(document.id, document.updatedAt) { mutableStateOf(document.title) }
-    var tags by remember(document.id, document.updatedAt) { mutableStateOf(document.tags) }
-    var provider by remember(document.id, document.updatedAt) { mutableStateOf(document.provider) }
-    var issuedDate by remember(document.id, document.updatedAt) { mutableStateOf(document.issuedDate.orEmpty()) }
-    var expiryDate by remember(document.id, document.updatedAt) { mutableStateOf(document.expiryDate.orEmpty()) }
-    var protocolNumber by remember(document.id, document.updatedAt) { mutableStateOf(document.protocolNumber.orEmpty()) }
-    var category by remember(document.id, document.updatedAt) { mutableStateOf(document.category) }
-    var titleConfirmed by remember(document.id, document.updatedAt) { mutableStateOf(document.titleManuallyEdited) }
-    var categoryConfirmed by remember(document.id, document.updatedAt) { mutableStateOf(document.categoryManuallyEdited) }
-    var providerConfirmed by remember(document.id, document.updatedAt) { mutableStateOf(document.providerManuallyEdited) }
-    var issuedConfirmed by remember(document.id, document.updatedAt) { mutableStateOf(document.issuedDateManuallyEdited) }
-    var expiryConfirmed by remember(document.id, document.updatedAt) { mutableStateOf(document.expiryDateManuallyEdited) }
-    var protocolConfirmed by remember(document.id, document.updatedAt) { mutableStateOf(document.protocolNumberManuallyEdited) }
+    var title by remember(document.id) { mutableStateOf(document.title) }
+    var tags by remember(document.id) { mutableStateOf(document.tags) }
+    var provider by remember(document.id) { mutableStateOf(document.provider) }
+    var issuedDate by remember(document.id) { mutableStateOf(document.issuedDate.orEmpty()) }
+    var expiryDate by remember(document.id) { mutableStateOf(document.expiryDate.orEmpty()) }
+    var protocolNumber by remember(document.id) { mutableStateOf(document.protocolNumber.orEmpty()) }
+    var category by remember(document.id) { mutableStateOf(document.category) }
+    var titleConfirmed by remember(document.id) { mutableStateOf(document.titleManuallyEdited) }
+    var categoryConfirmed by remember(document.id) { mutableStateOf(document.categoryManuallyEdited) }
+    var providerConfirmed by remember(document.id) { mutableStateOf(document.providerManuallyEdited) }
+    var issuedConfirmed by remember(document.id) { mutableStateOf(document.issuedDateManuallyEdited) }
+    var expiryConfirmed by remember(document.id) { mutableStateOf(document.expiryDateManuallyEdited) }
+    var protocolConfirmed by remember(document.id) { mutableStateOf(document.protocolNumberManuallyEdited) }
     var menu by remember { mutableStateOf(false) }
     val categories = listOf("Ταυτότητα / προσωπικά", "Μετανάστευση / άδειες", "Κατοικία", "Δημόσιες υπηρεσίες", "Εργασία", "Οικονομικά", "Λογαριασμοί", "Υγεία", "Συμβόλαια", "Άλλα")
     val expirySuggestion = document.expiryDateSuggestion
@@ -919,7 +992,7 @@ private fun MetadataConfirmationRow(label: String, confidence: String, confirmed
 private fun EventDialog(onDismiss: () -> Unit, onSave: (String, String) -> Unit) { var title by remember { mutableStateOf("") }; var note by remember { mutableStateOf("") }; AlertDialog(onDismissRequest = onDismiss, title = { Text("Νέο γεγονός") }, text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedTextField(title, { title = it }, label = { Text("Τίτλος γεγονότος") }, singleLine = true); OutlinedTextField(note, { note = it }, label = { Text("Σημείωση") }, minLines = 2) } }, confirmButton = { TextButton(enabled = title.isNotBlank(), onClick = { onSave(title, note) }) { Text("Αποθήκευση") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Ακύρωση") } }) }
 
 @Composable
-private fun PasswordDialog(title: String, minimumLength: Int, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+private fun PasswordDialog(title: String, minimumLength: Int, confirmPassword: Boolean, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var password by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
     var visible by remember { mutableStateOf(false) }
@@ -933,12 +1006,14 @@ private fun PasswordDialog(title: String, minimumLength: Int, onDismiss: () -> U
                 visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = { IconButton(onClick = { visible = !visible }) { Icon(if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility, "Προβολή κωδικού") } }
             )
-            OutlinedTextField(
-                confirmation, { confirmation = it }, label = { Text("Επιβεβαίωση κωδικού") }, singleLine = true,
-                visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation()
-            )
+            if (confirmPassword) {
+                OutlinedTextField(
+                    confirmation, { confirmation = it }, label = { Text("Επιβεβαίωση κωδικού") }, singleLine = true,
+                    visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation()
+                )
+            }
         } },
-        confirmButton = { TextButton(enabled = password.length >= minimumLength && password == confirmation, onClick = { onConfirm(password) }) { Text("Συνέχεια") } },
+        confirmButton = { TextButton(enabled = password.length >= minimumLength && (!confirmPassword || password == confirmation), onClick = { onConfirm(password) }) { Text("Συνέχεια") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Ακύρωση") } }
     )
 }

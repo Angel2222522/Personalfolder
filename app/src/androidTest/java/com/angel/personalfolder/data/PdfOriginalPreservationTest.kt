@@ -12,8 +12,11 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 import kotlinx.coroutines.runBlocking
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -128,6 +131,76 @@ class PdfOriginalPreservationTest {
             FileCrypto.deleteRecursively(root)
             generated.close()
             plainPdf.delete()
+        }
+    }
+
+    @Test
+    fun sharePdfKeepsEveryPdfSourceInOneDocument() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val database = AppDatabase.get(context)
+        val id = "pdf-sources-${UUID.randomUUID()}"
+        val root = context.filesDir.resolve("documents/$id").apply { mkdirs() }
+        val sourceFiles = listOf(root.resolve("page_0.pf"), root.resolve("page_1.pf"))
+        val plainFiles = listOf(
+            context.cacheDir.resolve("pdf-source-a-${UUID.randomUUID()}.pdf"),
+            context.cacheDir.resolve("pdf-source-b-${UUID.randomUUID()}.pdf")
+        )
+        var shared: File? = null
+        try {
+            listOf(Color.RED, Color.BLUE).forEachIndexed { index, color ->
+                val generated = PdfDocument()
+                val page = generated.startPage(PdfDocument.PageInfo.Builder(240, 240, 1).create())
+                page.canvas.drawColor(Color.WHITE)
+                page.canvas.drawRect(40f, 40f, 200f, 200f, Paint().apply { this.color = color })
+                generated.finishPage(page)
+                FileOutputStream(plainFiles[index]).use(generated::writeTo)
+                generated.close()
+                FileCrypto.encrypt(ByteArrayInputStream(plainFiles[index].readBytes()), sourceFiles[index])
+            }
+            val now = System.currentTimeMillis()
+            database.withTransaction {
+                database.documentDao().insert(
+                    DocumentEntity(
+                        id = id,
+                        title = "Πολλαπλές πηγές",
+                        originalFileName = "first.pdf",
+                        mimeType = "application/pdf",
+                        encryptedPath = sourceFiles.first().absolutePath,
+                        pageCount = 2,
+                        processingState = ProcessingState.PROCESSED,
+                        createdAt = now,
+                        updatedAt = now
+                    )
+                )
+                database.documentPageDao().insertAll(
+                    sourceFiles.mapIndexed { index, source ->
+                        DocumentPageEntity(id, index, source.absolutePath, sourceFileName = "source-$index.pdf", mimeType = "application/pdf")
+                    }
+                )
+            }
+
+            shared = ExportService(context).createSharePdf(id)
+            ParcelFileDescriptor.open(shared, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
+                PdfRenderer(descriptor).use { renderer ->
+                    assertEquals(2, renderer.pageCount)
+                    renderer.openPage(0).use { first ->
+                        val bitmap = PdfBitmapRenderer.render(first, 480)
+                        try { assertTrue(android.graphics.Color.red(bitmap.getPixel(240, 240)) > 180) } finally { bitmap.recycle() }
+                    }
+                    renderer.openPage(1).use { second ->
+                        val bitmap = PdfBitmapRenderer.render(second, 480)
+                        try { assertTrue(android.graphics.Color.blue(bitmap.getPixel(240, 240)) > 180) } finally { bitmap.recycle() }
+                    }
+                }
+            }
+        } finally {
+            shared?.delete()
+            database.withTransaction {
+                database.documentPageDao().deleteForDocument(id)
+                database.documentDao().deleteById(id)
+            }
+            FileCrypto.deleteRecursively(root)
+            plainFiles.forEach(File::delete)
         }
     }
 }

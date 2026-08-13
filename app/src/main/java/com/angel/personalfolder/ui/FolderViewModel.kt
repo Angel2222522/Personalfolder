@@ -92,76 +92,76 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     fun documentFlow(id: String) = repository.documentFlow(id)
 
     fun updateDocument(id: String, title: String, category: String, tags: String, provider: String, issuedDate: String?, expiryDate: String?, protocolNumber: String?, confirmedFields: MetadataFieldConfirmations? = null) = viewModelScope.launch {
-        runCatching { repository.updateDocumentMetadata(id, title, category, tags, provider, issuedDate, expiryDate, protocolNumber, confirmedFields) }
+        suspendRunCatching { repository.updateDocumentMetadata(id, title, category, tags, provider, issuedDate, expiryDate, protocolNumber, confirmedFields) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αποθήκευση.") }
     }
 
     fun rerunOcr(id: String) = viewModelScope.launch {
-        runCatching { repository.retryOcr(id) }
+        suspendRunCatching { repository.retryOcr(id) }
             .onSuccess { _message.emit("Η επεξεργασία OCR ξεκίνησε ξανά.") }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η επανάληψη OCR.") }
     }
 
     fun deleteDocument(id: String) = viewModelScope.launch {
-        runCatching { repository.deleteDocument(id) }
+        suspendRunCatching { repository.deleteDocument(id) }
             .onSuccess { _message.emit("Το έγγραφο διαγράφηκε.") }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η διαγραφή.") }
     }
 
     fun createCase(title: String, description: String) = viewModelScope.launch {
         if (title.isBlank()) return@launch
-        runCatching { repository.createCase(title, description) }
+        suspendRunCatching { repository.createCase(title, description) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η δημιουργία υπόθεσης.") }
     }
 
     fun createCase(title: String, description: String, startDate: String?, deadline: String?, nextStep: String, notes: String) = viewModelScope.launch {
-        runCatching { repository.createCase(title, description, startDate, deadline, nextStep, notes) }
+        suspendRunCatching { repository.createCase(title, description, startDate, deadline, nextStep, notes) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η δημιουργία υπόθεσης.") }
     }
 
     fun updateCase(id: String, title: String, description: String, status: String, startDate: String?, deadline: String?, nextStep: String, notes: String) = viewModelScope.launch {
-        runCatching { repository.updateCase(id, title, description, status, startDate, deadline, nextStep, notes) }
+        suspendRunCatching { repository.updateCase(id, title, description, status, startDate, deadline, nextStep, notes) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αποθήκευση της υπόθεσης.") }
     }
 
     fun deleteCase(id: String) = viewModelScope.launch {
-        runCatching { repository.deleteCase(id) }
+        suspendRunCatching { repository.deleteCase(id) }
             .onSuccess { _message.emit("Η υπόθεση διαγράφηκε.") }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η διαγραφή της υπόθεσης.") }
     }
 
     fun updateCaseStatus(id: String, status: String) = viewModelScope.launch {
-        runCatching { repository.updateCaseStatus(id, status) }
+        suspendRunCatching { repository.updateCaseStatus(id, status) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αλλαγή κατάστασης.") }
     }
 
     fun addTimelineEvent(caseId: String, title: String, note: String) = viewModelScope.launch {
-        if (title.isNotBlank()) runCatching { repository.addTimelineEvent(caseId, title, note) }
+        if (title.isNotBlank()) suspendRunCatching { repository.addTimelineEvent(caseId, title, note) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η προσθήκη γεγονότος.") }
     }
 
     fun addChecklistItem(caseId: String, title: String) = viewModelScope.launch {
-        if (title.isNotBlank()) runCatching { repository.addChecklistItem(caseId, title) }
+        if (title.isNotBlank()) suspendRunCatching { repository.addChecklistItem(caseId, title) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η προσθήκη δικαιολογητικού.") }
     }
 
     fun addChecklistItem(caseId: String, title: String, linkedDocumentId: String?) = viewModelScope.launch {
-        if (title.isNotBlank()) runCatching { repository.addChecklistItem(caseId, title, linkedDocumentId) }
+        if (title.isNotBlank()) suspendRunCatching { repository.addChecklistItem(caseId, title, linkedDocumentId) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η προσθήκη.") }
     }
 
     fun setChecklistComplete(item: ChecklistItemEntity, complete: Boolean) = viewModelScope.launch {
-        runCatching { repository.setChecklistComplete(item.id, complete) }
+        suspendRunCatching { repository.setChecklistComplete(item.id, complete) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η ενημέρωση.") }
     }
 
     fun linkChecklistDocument(item: ChecklistItemEntity, documentId: String?) = viewModelScope.launch {
-        runCatching { repository.linkChecklistDocument(item.id, documentId) }
+        suspendRunCatching { repository.linkChecklistDocument(item.id, documentId) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η σύνδεση.") }
     }
 
     fun deleteChecklistItem(item: ChecklistItemEntity) = viewModelScope.launch {
-        runCatching { repository.deleteChecklistItem(item.id) }
+        suspendRunCatching { repository.deleteChecklistItem(item.id) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η διαγραφή.") }
     }
 
@@ -170,17 +170,17 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
     fun caseDocuments(caseId: String) = repository.caseDocuments(caseId)
 
     fun attachDocumentToCase(caseId: String, documentId: String) = viewModelScope.launch {
-        runCatching { repository.attachDocumentToCase(caseId, documentId) }
+        suspendRunCatching { repository.attachDocumentToCase(caseId, documentId) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η σύνδεση.") }
     }
 
     fun detachDocumentFromCase(caseId: String, documentId: String) = viewModelScope.launch {
-        runCatching { repository.detachDocumentFromCase(caseId, documentId) }
+        suspendRunCatching { repository.detachDocumentFromCase(caseId, documentId) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η αποσύνδεση.") }
     }
 
     fun markReminderDone(id: String) = viewModelScope.launch {
-        runCatching { repository.markReminderDone(id) }
+        suspendRunCatching { repository.markReminderDone(id) }
             .onFailure { _message.emit(it.message ?: "Δεν ήταν δυνατή η ενημέρωση της υπενθύμισης.") }
     }
 
@@ -237,6 +237,14 @@ class FolderViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun beginOperation() { _activeOperations.update { it + 1 } }
     private fun endOperation() { _activeOperations.update { (it - 1).coerceAtLeast(0) } }
+
+    private suspend fun <T> suspendRunCatching(action: suspend () -> T): Result<T> = try {
+        Result.success(action())
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Throwable) {
+        Result.failure(error)
+    }
 
     private suspend fun trackedOperation(action: suspend () -> Unit, success: String, failure: String) {
         beginOperation()

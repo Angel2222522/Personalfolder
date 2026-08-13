@@ -39,6 +39,7 @@ import com.angel.personalfolder.data.DocumentEntity
 import com.angel.personalfolder.data.DocumentPageDisplayPolicy
 import com.angel.personalfolder.data.DocumentRenderService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -52,9 +53,16 @@ fun DocumentViewerScreen(document: DocumentEntity, onClose: () -> Unit) {
     var error by remember(document.id, document.updatedAt) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(document.id, document.updatedAt) {
-        runCatching { withContext(Dispatchers.IO) { service.logicalPages(document) } }
-            .onSuccess { pages = it; pageIndex = 0; error = null }
-            .onFailure { error = it.message ?: "Δεν ήταν δυνατή η ανάγνωση του εγγράφου." }
+        try {
+            val loadedPages = withContext(Dispatchers.IO) { service.logicalPages(document) }
+            pages = loadedPages
+            pageIndex = 0
+            error = null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            error = failure.message ?: "Δεν ήταν δυνατή η ανάγνωση του εγγράφου."
+        }
     }
     LaunchedEffect(document.id, pageIndex, pages) {
         val requestedPageIndex = pageIndex
@@ -68,8 +76,11 @@ fun DocumentViewerScreen(document: DocumentEntity, onClose: () -> Unit) {
             if (pageIndex == requestedPageIndex) {
                 bitmap = loaded
                 bitmapPageIndex = requestedPageIndex
+                error = null
                 loaded = null
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (failure: Throwable) {
             error = failure.message ?: "Δεν ήταν δυνατή η εμφάνιση της σελίδας."
         } finally {

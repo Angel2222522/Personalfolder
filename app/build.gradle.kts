@@ -1,5 +1,4 @@
 import java.io.File
-import java.net.URI
 import java.security.MessageDigest
 
 plugins {
@@ -29,52 +28,21 @@ fun gitBlobSha1(file: File): String {
     return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
 }
 
-val tesseractDataCommit = "87416418657359cb625c412a48b6e1d6d41c29bd"
 val ocrModels = listOf(
     OcrModel("ell.traineddata", 1_419_514L, "ed98ae1a88d84414da316e6eeab3232f2c68639b"),
     OcrModel("eng.traineddata", 4_113_088L, "bbef4675053b5b468cdb477053e28b1c698ba08e")
 )
-val generatedOcrAssetsDir = layout.buildDirectory.dir("generated/ocrAssets")
-
-val prepareOcrModels = tasks.register("prepareOcrModels") {
+val verifyOcrModels = tasks.register("verifyOcrModels") {
     doLast {
-        val tessdata = generatedOcrAssetsDir.get().asFile.resolve("tessdata").apply { mkdirs() }
+        val tessdata = layout.projectDirectory.dir("src/main/assets/tessdata").asFile
         for (model in ocrModels) {
             val destination = File(tessdata, model.name)
-            if (
-                destination.isFile &&
-                destination.length() == model.size &&
-                gitBlobSha1(destination) == model.gitBlobSha1
-            ) {
-                continue
+            check(destination.isFile) { "Missing pinned OCR model ${destination.path}" }
+            check(destination.length() == model.size) {
+                "Unexpected OCR model size for ${model.name}: ${destination.length()}"
             }
-
-            val temporary = File(tessdata, ".${model.name}.part")
-            temporary.delete()
-            val url = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/$tesseractDataCommit/${model.name}"
-            val connection = URI(url).toURL().openConnection().apply {
-                connectTimeout = 30_000
-                readTimeout = 60_000
-                setRequestProperty("User-Agent", "PersonalFolder-Gradle")
-            }
-            try {
-                connection.getInputStream().use { input ->
-                    temporary.outputStream().use { output -> input.copyTo(output) }
-                }
-                check(temporary.length() == model.size) {
-                    "Unexpected OCR model size for ${model.name}: ${temporary.length()}"
-                }
-                check(gitBlobSha1(temporary) == model.gitBlobSha1) {
-                    "OCR model checksum mismatch for ${model.name}"
-                }
-                if (destination.exists()) check(destination.delete()) {
-                    "Could not replace ${model.name}"
-                }
-                check(temporary.renameTo(destination)) {
-                    "Could not install ${model.name}"
-                }
-            } finally {
-                temporary.delete()
+            check(gitBlobSha1(destination) == model.gitBlobSha1) {
+                "OCR model checksum mismatch for ${model.name}"
             }
         }
     }
@@ -117,9 +85,9 @@ android {
 
     sourceSets {
         getByName("main") {
-            // Ignore the previously committed broken model files. The build uses only
-            // pinned, checksum-verified official Tesseract models generated above.
-            assets.setSrcDirs(listOf(generatedOcrAssetsDir.get().asFile))
+            // The pinned models are versioned with the source tree. The build
+            // verifies their size and Git blob identity before packaging.
+            assets.setSrcDirs(listOf(layout.projectDirectory.dir("src/main/assets").asFile))
         }
         getByName("androidTest") {
             assets.srcDir("$projectDir/schemas")
@@ -182,7 +150,7 @@ android {
 
 tasks.configureEach {
     if (name.startsWith("merge") && name.endsWith("Assets")) {
-        dependsOn(prepareOcrModels)
+        dependsOn(verifyOcrModels)
     }
 }
 
