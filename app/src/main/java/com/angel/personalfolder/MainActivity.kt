@@ -130,7 +130,7 @@ class MainActivity : FragmentActivity() {
                 ScreenshotPrivacyShell(
                     screenshotsAllowed = screenshotsAllowed,
                     locked = lockEnabled && !sessionUnlocked,
-                    onScreenshotsAllowedChange = ::setScreenshotsAllowed
+                    onScreenshotsAllowedChange = ::updateScreenshotPreference
                 ) {
                     FolderApp(
                         viewModel = viewModel,
@@ -219,7 +219,7 @@ class MainActivity : FragmentActivity() {
         super.onSaveInstanceState(outState)
     }
 
-    private fun setScreenshotsAllowed(allowed: Boolean) {
+    private fun updateScreenshotPreference(allowed: Boolean) {
         settings.edit().putBoolean(KEY_SCREENSHOTS_ALLOWED, allowed).apply()
         screenshotsAllowed = allowed
         applyScreenCapturePolicy()
