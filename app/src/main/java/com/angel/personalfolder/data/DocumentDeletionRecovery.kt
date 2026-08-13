@@ -38,30 +38,47 @@ object DocumentDeletionRecovery {
         DataOperationCoordinator.withExclusiveDuringStartup {
             val journalFile = context.filesDir.resolve(JOURNAL_FILE)
             if (!journalFile.isFile) return@withExclusiveDuringStartup
-            val journal = runCatching { JSONObject(journalFile.readText(Charsets.UTF_8)) }.getOrNull()
-                ?: return@withExclusiveDuringStartup
+            val journal = runCatching { JSONObject(journalFile.readText(Charsets.UTF_8)) }
+                .getOrElse { throw IllegalStateException("Το ημερολόγιο διαγραφής δεν είναι έγκυρο.", it) }
             val documentId = journal.optString("documentId")
             val root = safePath(journal.optString("root"), context.filesDir.resolve("documents"))
             val quarantine = safePath(journal.optString("quarantine"), context.cacheDir)
-            if (documentId.isBlank() || root == null || quarantine == null) return@withExclusiveDuringStartup
+            require(documentId.matches(Regex("[A-Za-z0-9_-]{1,100}"))) {
+                "Το ημερολόγιο διαγραφής περιέχει μη έγκυρο έγγραφο."
+            }
+            val safeRoot = requireNotNull(root) { "Το ημερολόγιο διαγραφής περιέχει μη ασφαλή ρίζα." }
+            val safeQuarantine = requireNotNull(quarantine) { "Το ημερολόγιο διαγραφής περιέχει μη ασφαλή quarantine." }
+            val documentsRoot = context.filesDir.resolve("documents").canonicalFile
+            require(safeRoot.parentFile == documentsRoot && safeRoot.name == documentId) {
+                "Το ημερολόγιο διαγραφής δείχνει σε μη έγκυρο χώρο εγγράφου."
+            }
+            val quarantineRoot = context.cacheDir.resolve("deleted_documents").canonicalFile
+            require(safeQuarantine.parentFile == quarantineRoot) {
+                "Το ημερολόγιο διαγραφής δείχνει σε μη έγκυρο quarantine."
+            }
 
             val stillInDatabase = database.documentDao().getById(documentId) != null
             val phase = journal.optString("phase")
             when {
                 phase == "database_committed" || !stillInDatabase -> {
-                    FileCrypto.deleteRecursivelyStrict(quarantine)
+                    FileCrypto.deleteRecursivelyStrict(safeRoot)
+                    FileCrypto.deleteRecursivelyStrict(safeQuarantine)
                     clearJournal(context)
                 }
 
-                stillInDatabase && !root.exists() && quarantine.exists() -> {
-                    require(quarantine.renameTo(root)) { "Δεν ήταν δυνατή η ανάκτηση του εγγράφου." }
+                stillInDatabase && !safeRoot.exists() && safeQuarantine.exists() -> {
+                    require(safeQuarantine.renameTo(safeRoot)) { "Δεν ήταν δυνατή η ανάκτηση του εγγράφου." }
                     clearJournal(context)
                 }
 
-                stillInDatabase && root.exists() -> {
-                    FileCrypto.deleteRecursivelyStrict(quarantine)
+                stillInDatabase && safeRoot.exists() -> {
+                    FileCrypto.deleteRecursivelyStrict(safeQuarantine)
                     clearJournal(context)
                 }
+
+                else -> throw IllegalStateException(
+                    "Η διαγραφή άφησε αμφίσημη κατάσταση αρχείων. Η λειτουργία παραμένει κλειδωμένη."
+                )
             }
         }
     }

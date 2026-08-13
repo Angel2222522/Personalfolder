@@ -145,6 +145,20 @@ class RepositoryImportDeleteExportTest {
     }
 
     @Test
+    fun malformedDeleteJournalFailsClosedDuringStartupRecovery() = runBlocking {
+        val journal = context.filesDir.resolve("document_delete_journal.json")
+        try {
+            journal.writeText("{not-json}")
+            assertThrows(IllegalStateException::class.java) {
+                runBlocking { DocumentDeletionRecovery.recover(context, database) }
+            }
+            assertTrue(journal.isFile)
+        } finally {
+            journal.delete()
+        }
+    }
+
+    @Test
     fun confirmedExpiryCreatesRemindersAndClearingExpiryRemovesThem() = runBlocking {
         val fixture = insertFixture("reminder-${UUID.randomUUID()}", "reminder-source.png", "reminder")
         val repository = FolderRepository(context)
