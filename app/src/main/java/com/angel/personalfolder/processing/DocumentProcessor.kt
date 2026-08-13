@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.graphics.pdf.PdfRenderer
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.exifinterface.media.ExifInterface
 import com.angel.personalfolder.data.AppDatabase
@@ -15,8 +16,8 @@ import com.angel.personalfolder.data.PdfBitmapRenderer
 import com.angel.personalfolder.data.ProcessingState
 import com.angel.personalfolder.data.ReminderScheduler
 import com.angel.personalfolder.security.FileCrypto
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
@@ -66,7 +67,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
             // metadata while OCR was running; never overwrite that newer manual choice.
             val latest = database.documentDao().getById(document.id) ?: document
             if (fullText.isBlank()) {
-                val message = "Το OCR ολοκληρώθηκε χωρίς αναγνωρίσιμο κείμενο."
+                val message = "Η αναγνώριση ολοκληρώθηκε χωρίς αναγνωρίσιμο κείμενο."
                 database.documentDao().update(latest.copy(processingState = ProcessingState.FAILED, processingError = message, updatedAt = System.currentTimeMillis()))
                 return@withContext Result.failure(IllegalStateException(message))
             }
@@ -107,15 +108,28 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                     for (index in 0 until renderer.pageCount) {
                         if (length >= maxCharacters) break
                         renderer.openPage(index).use { page ->
-                            val bitmap = PdfBitmapRenderer.render(page, OCR_MAX_SIDE)
-                            try {
-                                val text = ocr.recognize(bitmap)
-                                if (text.isNotBlank()) {
-                                    if (isNotEmpty()) append("\n\n")
-                                    append(text.take((maxCharacters - length).coerceAtLeast(0)))
+                            val nativeText = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                                OcrTextPostProcessor.normalizeNativePdfText(
+                                    page.textContents.joinToString("\n") { content -> content.text }
+                                )
+                            } else {
+                                ""
+                            }
+
+                            val pageText = if (OcrTextPostProcessor.isUsableNativePdfText(nativeText)) {
+                                nativeText
+                            } else {
+                                val bitmap = PdfBitmapRenderer.renderForOcr(page, OCR_MAX_SIDE)
+                                try {
+                                    ocr.recognize(bitmap)
+                                } finally {
+                                    bitmap.recycle()
                                 }
-                            } finally {
-                                bitmap.recycle()
+                            }
+
+                            if (pageText.isNotBlank()) {
+                                if (isNotEmpty()) append("\n\n")
+                                append(pageText.take((maxCharacters - length).coerceAtLeast(0)))
                             }
                         }
                     }
@@ -147,7 +161,7 @@ class DocumentProcessor(private val context: Context, private val database: AppD
             (sourceName.isBlank() && document.mimeType.equals("application/pdf", true))
 
     private companion object {
-        const val OCR_MAX_SIDE = 2600
+        const val OCR_MAX_SIDE = 3_600
         const val MAX_DOCUMENT_OCR_CHARS = 2_000_000
         const val MAX_LOGICAL_PAGES = 1_000
     }
