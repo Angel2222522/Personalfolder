@@ -137,7 +137,7 @@ class ExportService(private val context: Context) {
                     renderService.logicalPages(document, lockDocument = false)
                 }
             } else {
-                renderService.logicalPages(document)
+                renderService.logicalPages(document, lockDocument = false)
             }
             logicalPages.forEach { page -> pages += document to page }
         }
