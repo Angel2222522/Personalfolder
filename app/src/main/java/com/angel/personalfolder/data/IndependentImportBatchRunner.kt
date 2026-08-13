@@ -7,7 +7,8 @@ import kotlinx.coroutines.CancellationException
  *
  * The runner is intentionally sequential: importing one source may validate and
  * encrypt a large PDF, so bounded one-at-a-time admission avoids memory spikes.
- * A failed source is recorded and the remaining sources still run.
+ * A recoverable failure is recorded and the remaining sources still run. Fatal
+ * VM/linkage errors are deliberately not downgraded to a single bad document.
  */
 object IndependentImportBatchRunner {
     suspend fun <T, R> run(
@@ -19,8 +20,8 @@ object IndependentImportBatchRunner {
         for (item in items) {
             try {
                 successes += importOne(item)
-            } catch (error: Throwable) {
-                if (error is CancellationException || error is OutOfMemoryError) throw error
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
                 failures += 1
             }
         }

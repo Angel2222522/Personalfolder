@@ -4,6 +4,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -37,4 +38,23 @@ class IndependentImportBatchRunnerTest {
         assertEquals(1, maxActive.get())
         assertTrue(attempted.last() == "synthetic-document-10.pdf")
     }
+
+    @Test
+    fun fatalErrorsAreNotSilentlyCountedAsOneBadDocument() = runTest {
+        var attempted = 0
+        try {
+            IndependentImportBatchRunner.run(listOf(1, 2, 3)) { item ->
+                attempted += 1
+                if (item == 1) throw SyntheticFatalError()
+                item
+            }
+            fail("A fatal error must escape the batch runner.")
+        } catch (_: SyntheticFatalError) {
+            // Expected: the runner isolates ordinary source failures, not fatal VM-style errors.
+        }
+
+        assertEquals(1, attempted)
+    }
+
+    private class SyntheticFatalError : Error("synthetic fatal import error")
 }
