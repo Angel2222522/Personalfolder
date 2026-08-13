@@ -31,10 +31,12 @@ object BackupSizePolicy {
         events: Int,
         checklist: Int,
         reminders: Int,
-        totalOcrChars: Long
+        totalOcrChars: Long,
+        totalMetadataJsonChars: Long = 0L
     ) {
         LibraryLimits.requireTableCounts(documents, pages, cases, events, checklist, reminders)
         LibraryLimits.requireTotalOcrChars(totalOcrChars)
+        LibraryLimits.requireTotalMetadataJsonChars(totalMetadataJsonChars)
     }
 
     fun requireDocumentShapes(documents: List<DocumentEntity>, pages: List<DocumentPageEntity>) {

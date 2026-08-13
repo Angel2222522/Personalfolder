@@ -86,6 +86,9 @@ interface DocumentDao {
     @Query("SELECT COALESCE(SUM(LENGTH(ocrText)), 0) FROM documents")
     suspend fun totalDocumentOcrChars(): Long
 
+    @Query("SELECT COALESCE(SUM(LENGTH(extractedMetadataJson)), 0) FROM documents")
+    suspend fun totalMetadataJsonChars(): Long
+
     @Query("SELECT * FROM documents WHERE processingState = :state")
     suspend fun getByProcessingState(state: String): List<DocumentEntity>
 

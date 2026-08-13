@@ -88,6 +88,15 @@ class DocumentProcessor(private val context: Context, private val database: AppD
                     database.documentDao().update(latest.copy(processingState = ProcessingState.FAILED, processingError = message, updatedAt = System.currentTimeMillis()))
                     return@withExclusive null to Result.failure(IllegalStateException(message))
                 }
+                LibraryLimits.requireTotalOcrChars(
+                    database.documentDao().totalDocumentOcrChars() - latest.ocrText.length + fullText.length
+                )
+                LibraryLimits.requireTotalMetadataJsonChars(
+                    database.documentDao().totalMetadataJsonChars() - latest.extractedMetadataJson.length + metadata.json.length
+                )
+                require(metadata.json.length <= LibraryLimits.MAX_METADATA_JSON_CHARS) {
+                    "Τα μεταδεδομένα του εγγράφου είναι υπερβολικά μεγάλα."
+                }
                 // Keep low-confidence candidates in their fields together with
                 // confidence/provenance. They remain visibly unconfirmed and
                 // cannot create reminders, but can be confirmed per field later.

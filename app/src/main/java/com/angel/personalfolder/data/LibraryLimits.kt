@@ -23,6 +23,7 @@ object LibraryLimits {
     const val MAX_DOCUMENT_OCR_CHARS = 2_000_000
     const val MAX_TOTAL_OCR_CHARS = 16_000_000
     const val MAX_METADATA_JSON_CHARS = 200_000
+    const val MAX_TOTAL_METADATA_JSON_CHARS = 4_000_000
 
     /** The manifest is bounded before it is parsed into an in-memory JSON tree. */
     const val MAX_BACKUP_MANIFEST_BYTES = 64L * 1024 * 1024
@@ -67,6 +68,12 @@ object LibraryLimits {
     fun requireTotalOcrChars(count: Long) {
         require(count in 0L..MAX_TOTAL_OCR_CHARS.toLong()) {
             "Το συνολικό αναγνωρισμένο κείμενο είναι υπερβολικά μεγάλο."
+        }
+    }
+
+    fun requireTotalMetadataJsonChars(count: Long) {
+        require(count in 0L..MAX_TOTAL_METADATA_JSON_CHARS.toLong()) {
+            "Τα συνολικά μεταδεδομένα είναι υπερβολικά μεγάλα."
         }
     }
 }

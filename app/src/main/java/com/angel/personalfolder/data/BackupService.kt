@@ -113,9 +113,9 @@ class BackupService(private val context: Context) {
     suspend fun create(destination: Uri, password: String) = withContext(Dispatchers.IO) {
         DataOperationCoordinator.requireUserSessionUnlocked()
         require(password.length >= MIN_NEW_BACKUP_PASSWORD_LENGTH) { "Ο νέος κωδικός backup πρέπει να έχει τουλάχιστον $MIN_NEW_BACKUP_PASSWORD_LENGTH χαρακτήρες." }
-        val (payload, pages) = DataOperationCoordinator.withExclusive {
-            snapshot() to database.documentPageDao().getAll()
-        }
+        val snapshot = DataOperationCoordinator.withExclusive { snapshot() }
+        val payload = snapshot.payload
+        val pages = snapshot.pages
         val zip = context.cacheDir.resolve("backup/personal_folder_${System.currentTimeMillis()}.zip").apply {
             parentFile?.mkdirs()
         }
@@ -172,7 +172,7 @@ class BackupService(private val context: Context) {
         }
     }
 
-    private suspend fun snapshot(): JSONObject {
+    private suspend fun snapshot(): Snapshot {
         return database.withTransaction {
             // Check scalar counts and OCR volume before materialising any
             // entity collection or JSON tree. The old implementation first
@@ -191,7 +191,8 @@ class BackupService(private val context: Context) {
                 events = eventCount,
                 checklist = checklistCount,
                 reminders = reminderCount,
-                totalOcrChars = database.documentDao().totalDocumentOcrChars() + database.documentPageDao().totalOcrChars()
+                totalOcrChars = database.documentDao().totalDocumentOcrChars() + database.documentPageDao().totalOcrChars(),
+                totalMetadataJsonChars = database.documentDao().totalMetadataJsonChars()
             )
             val documents = database.documentDao().getAll()
             val pages = database.documentPageDao().getAll()
@@ -208,9 +209,10 @@ class BackupService(private val context: Context) {
                 events = events.size,
                 checklist = checklist.size,
                 reminders = reminders.size,
-                totalOcrChars = documents.sumOf { it.ocrText.length.toLong() } + pages.sumOf { it.ocrText.length.toLong() }
+                totalOcrChars = documents.sumOf { it.ocrText.length.toLong() } + pages.sumOf { it.ocrText.length.toLong() },
+                totalMetadataJsonChars = documents.sumOf { it.extractedMetadataJson.length.toLong() }
             )
-            JSONObject().apply {
+            val payload = JSONObject().apply {
                 put("formatVersion", 4)
                 put("createdAt", System.currentTimeMillis())
                 put("documents", JSONArray().apply { documents.forEach { put(documentJson(it)) } })
@@ -221,6 +223,7 @@ class BackupService(private val context: Context) {
                 put("checklist", JSONArray().apply { checklist.forEach { put(checklistJson(it)) } })
                 put("reminders", JSONArray().apply { reminders.forEach { put(reminderJson(it)) } })
             }
+            Snapshot(payload, pages)
         }
     }
 
@@ -295,7 +298,8 @@ class BackupService(private val context: Context) {
                 checklist = checklist.size,
                 reminders = reminders.size,
                 totalOcrChars = documents.sumOf { it.ocrText.length.toLong() } +
-                    pageDescriptors.sumOf { it.ocrText.length.toLong() }
+                    pageDescriptors.sumOf { it.ocrText.length.toLong() },
+                totalMetadataJsonChars = documents.sumOf { it.extractedMetadataJson.length.toLong() }
             )
             val restoredPages = documents.flatMap { document ->
                 pageDescriptors.filter { it.documentId == document.id }.map { descriptor ->
@@ -488,8 +492,8 @@ class BackupService(private val context: Context) {
                 issuedDate = item.optNullableString("issuedDate"),
                 expiryDate = confirmedExpiry,
                 protocolNumber = item.optNullableString("protocolNumber"),
-                ocrText = item.optString("ocrText").take(MAX_OCR_TEXT),
-                extractedMetadataJson = item.optString("extractedMetadataJson").take(MAX_METADATA_JSON),
+                ocrText = item.optString("ocrText").requireLength(MAX_OCR_TEXT, "Το OCR του εγγράφου είναι υπερβολικά μεγάλο."),
+                extractedMetadataJson = item.optString("extractedMetadataJson").requireLength(MAX_METADATA_JSON, "Τα μεταδεδομένα του εγγράφου είναι υπερβολικά μεγάλα."),
                 processingState = safeProcessingState(item.optString("processingState", ProcessingState.PROCESSED)),
                 processingError = item.optNullableString("processingError") ?: item.optString("processingState").let {
                     if (it == ProcessingState.QUEUED || it == ProcessingState.PROCESSING) "Η επεξεργασία δεν συνεχίστηκε μετά την επαναφορά. Επίλεξε επανάληψη OCR." else null
@@ -619,6 +623,7 @@ class BackupService(private val context: Context) {
             require(dueAt != Long.MIN_VALUE) { "Η υπενθύμιση έχει μη έγκυρη ημερομηνία." }
             val leadDays = x.optInt("leadDays").coerceIn(0, 3650)
             val deadlineAt = x.optLong("deadlineAt", dueAt.saturatingAdd(leadDays.toLong() * 86_400_000L))
+            require(deadlineAt != Long.MIN_VALUE && deadlineAt >= dueAt) { "Η υπενθύμιση έχει μη έγκυρη προθεσμία." }
             // Validate the complete legacy/current row first. Only then
             // discard a document reminder whose expiry is still a suggestion;
             // malformed backup data must never be hidden by that policy.
@@ -724,6 +729,12 @@ class BackupService(private val context: Context) {
     private fun JSONObject.putNullable(key: String, value: String?) { put(key, value ?: JSONObject.NULL) }
     private fun JSONObject.optNullableString(key: String): String? = if (isNull(key)) null else optString(key).ifBlank { null }
 
+    private fun String.requireLength(max: Int, message: String): String {
+        require(length <= max) { message }
+        return this
+    }
+
+    private data class Snapshot(val payload: JSONObject, val pages: List<DocumentPageEntity>)
     private data class ArchiveInfo(val manifest: String, val names: Set<String>)
     private data class PageDescriptor(val documentId: String, val pageIndex: Int, val entryName: String, val ocrText: String, val sourceFileName: String, val mimeType: String)
 
