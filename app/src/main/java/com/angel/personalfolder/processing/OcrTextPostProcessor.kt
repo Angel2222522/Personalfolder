@@ -6,6 +6,9 @@ import java.text.Normalizer
  * Conservative cleanup applied after OCR. It fixes Unicode noise and a common
  * Greek OCR failure where visually identical Latin capitals are mixed into an
  * otherwise Greek token. Pure English/Latin tokens are intentionally left alone.
+ *
+ * Keep corrections deterministic: this class may repair a known OCR spelling or
+ * script confusion, but it must never invent missing document content.
  */
 object OcrTextPostProcessor {
     private val latinToGreekUppercase = mapOf(
@@ -29,7 +32,8 @@ object OcrTextPostProcessor {
 
     fun normalizeOcrText(text: String): String {
         val normalized = normalizeUnicodeAndWhitespace(text)
-        return MIXED_TOKEN.replace(normalized) { match -> repairMixedGreekToken(match.value) }
+        val scriptRepaired = MIXED_TOKEN.replace(normalized) { match -> repairMixedGreekToken(match.value) }
+        return repairKnownAdministrativeOcrPatterns(scriptRepaired)
     }
 
     fun isUsableNativePdfText(text: String): Boolean {
@@ -87,6 +91,24 @@ object OcrTextPostProcessor {
         return token.map { latinToGreekUppercase[it] ?: it }.joinToString("")
     }
 
+    private fun repairKnownAdministrativeOcrPatterns(text: String): String {
+        var repaired = GREEK_REPUBLIC_HEADING.replace(text, "ΕΛΛΗΝΙΚΗ ΔΗΜΟΚΡΑΤΙΑ")
+
+        // OCR often reads the Greek ordinal omicron after a school number as a
+        // degree/quote symbol. This rule is intentionally limited to school types.
+        repaired = SCHOOL_ORDINAL.replace(repaired) { match ->
+            "${match.groupValues[1]}ο ${match.groupValues[2]}"
+        }
+
+        // These are recurring OCR transliterations of standard Greek field words,
+        // not document-specific names or values. Exact-token replacement avoids
+        // rewriting arbitrary English text.
+        ADMIN_FIELD_CORRECTIONS.forEach { (pattern, replacement) ->
+            repaired = pattern.replace(repaired, replacement)
+        }
+        return repaired
+    }
+
     private fun isGreekLetter(character: Char): Boolean =
         character.isLetter() && Character.UnicodeBlock.of(character) in GREEK_BLOCKS
 
@@ -103,6 +125,20 @@ object OcrTextPostProcessor {
         Character.UnicodeBlock.LATIN_1_SUPPLEMENT,
         Character.UnicodeBlock.LATIN_EXTENDED_A,
         Character.UnicodeBlock.LATIN_EXTENDED_B
+    )
+
+    private val GREEK_REPUBLIC_HEADING = Regex(
+        """\b(?:EAAHNIKH|ΕΑΛΗΝΙΚΗ|ΕΛΛΗΝΙΚΗ)\s+(?:AHMOKPATIA|ΑΗΜΟΚΡΑΤΙΑ|ΔΗΜΟΚΡΑΤΙΑ)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val SCHOOL_ORDINAL = Regex(
+        """\b(\d{1,3})\s*[°º”″\"]\s*(Γυμνάσιο|Λύκειο|Δημοτικό)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val ADMIN_FIELD_CORRECTIONS = listOf(
+        Regex("""\bNatpwvupo\b""", RegexOption.IGNORE_CASE) to "Πατρώνυμο",
+        Regex("""\bMntpwvuypo\b""", RegexOption.IGNORE_CASE) to "Μητρώνυμο",
+        Regex("""\baitnon\b""", RegexOption.IGNORE_CASE) to "αίτηση"
     )
 
     private val MIXED_TOKEN = Regex("[\\p{L}\\p{M}]{2,}")

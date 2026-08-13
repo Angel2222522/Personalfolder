@@ -17,6 +17,36 @@ class OcrTextPostProcessorTest {
     }
 
     @Test
+    fun repairsKnownGreekRepublicHeadingVariantsWithoutGuessingValues() {
+        assertEquals(
+            "ΕΛΛΗΝΙΚΗ ΔΗΜΟΚΡΑΤΙΑ",
+            OcrTextPostProcessor.normalizeOcrText("EAAHNIKH AHMOKPATIA")
+        )
+        assertEquals(
+            "ΕΛΛΗΝΙΚΗ ΔΗΜΟΚΡΑΤΙΑ",
+            OcrTextPostProcessor.normalizeOcrText("ΕΑΛΗΝΙΚΗ ΑΗΜΟΚΡΑΤΙΑ")
+        )
+    }
+
+    @Test
+    fun repairsOnlyKnownAdministrativeFieldTokens() {
+        val input = "Natpwvupo: ΠΕΤΡΙΤ\nMntpwvuypo: ΜΙΡΕΛΑ\nόπως αναγράφεται στην aitnon"
+        assertEquals(
+            "Πατρώνυμο: ΠΕΤΡΙΤ\nΜητρώνυμο: ΜΙΡΕΛΑ\nόπως αναγράφεται στην αίτηση",
+            OcrTextPostProcessor.normalizeOcrText(input)
+        )
+    }
+
+    @Test
+    fun repairsSchoolOrdinalSymbolWithoutChangingOtherNumbers() {
+        val input = "Φοίτησε στο 28° Γυμνάσιο\nΑριθμός Μητρώου 4073"
+        assertEquals(
+            "Φοίτησε στο 28ο Γυμνάσιο\nΑριθμός Μητρώου 4073",
+            OcrTextPostProcessor.normalizeOcrText(input)
+        )
+    }
+
+    @Test
     fun doesNotRewritePureEnglishTokens() {
         val input = "RESIDENCE PERMIT API ID"
 
