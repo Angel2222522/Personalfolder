@@ -33,7 +33,9 @@ data class ExtractedMetadata(
 object MetadataExtractor {
     private val dateRegex = Regex("""(?<!\d)(\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})(?!\d)""")
     private val protocolRegex = Regex(
-        """^\s*(?:αριθμ(?:ός|ος)?\.?\s+πρωτ(?:οκ(?:ό|ο)λλου)?\.?|αρ\.?\s*πρωτ(?:οκ(?:ό|ο)λλου)?\.?|protocol(?:\s+(?:no|number)\.?)?)\s*[:#№-]?\s*([\p{L}\d][\p{L}\d./_\-\s]{1,119})\s*$""",
+        // Horizontal whitespace only: \s also matches newlines and previously let
+        // a protocol capture spill into the next OCR line.
+        """^[ \t]*(?:αριθμ(?:ός|ος)?\.?[ \t]+πρωτ(?:οκ(?:ό|ο)λλου)?\.?|αρ\.?[ \t]*πρωτ(?:οκ(?:ό|ο)λλου)?\.?|protocol(?:[ \t]+(?:no|number)\.?)?)[ \t]*[:#№-]?[ \t]*([\p{L}\d][\p{L}\d./_\- \t]{1,119})[ \t]*$""",
         setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)
     )
     private val datelineContextRegex = Regex("""^[\p{L}\p{M} .΄'’\-]{2,50}[:,]\s*$""")
