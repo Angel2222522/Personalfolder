@@ -39,19 +39,19 @@ The presence of a passing compile or lint run is not treated as proof of those f
 
 ## Latest remote verification
 
-Workflow run **#106** (`31716441666`) on remediation commit
-`39071cfd063ef231d1f15a23293bcd730f8da7dd` passed unit tests, lint,
+Workflow run **#107** (`31718235042`) on remediation commit
+`17c6415ba1453e48e639d809615a02edbb2b8042` passed unit tests, lint,
 instrumentation compilation, debug APK build, emulator instrumentation,
 unsigned release compilation and Room schema upload. Job `verify` was
-`94502252089`.
+`94508337029`.
 
 The emulator log records **22 tests with 0 failures and 0 ignored**. This is
 the actual remote runtime result; local source inspection or APK compilation
 alone is not treated as runtime verification. The run also produced the debug
-artifact ZIP (ID `9187858558`, SHA-256
-`c0f219cf5ad23f71aebcf70c75e4617d514579d060cadf58d09e8e54d67eb7e8`),
-instrumentation diagnostics (ID `9187859334`) and Room schemas (ID
-`9187945308`).
+artifact ZIP (ID `9188488015`, SHA-256
+`1704315f5fe66eb4691e853803d13cd2a42587f60e3b64b0b53556997cfb1c8c`),
+instrumentation diagnostics (ID `9188488820`) and Room schemas (ID
+`9188549616`).
 
 Runs #89, #102 and #106 are retained as historical/current CI evidence for
 their respective heads. Runs #103 and #104 are recorded as non-authoritative
@@ -62,7 +62,7 @@ incorrect far-future test fixture that was corrected in `696be0e`.
 
 The release source still uses application id `com.angel.personalfolder`,
 versionCode 3 and versionName 2.0.1, with explicit Room migrations through
-version 4 and no destructive migration. Run #106 correctly skips signing.
+version 4 and no destructive migration. Run #107 correctly skips signing.
 The permanent signing bundle is unavailable, so there is no signed release
 APK, certificate validation or in-place update continuity proof. The debug
 artifact is deliberately not presented as a final update artifact.

@@ -5,9 +5,9 @@ The report itself is unchanged: baseline commit
 `18e3e9b8ee1c353eda6bea2c330bf1e432e11b5d`, report blob
 `7225afcff363a6045b292c4a822104565dc922d8`.
 
-The latest authoritative CI result is workflow run **#106**
-(`31716441666`), job `verify` (`94502252089`), at head
-`39071cfd063ef231d1f15a23293bcd730f8da7dd`: unit tests, lint,
+The latest authoritative CI result is workflow run **#107**
+(`31718235042`), job `verify` (`94508337029`), at head
+`17c6415ba1453e48e639d809615a02edbb2b8042`: unit tests, lint,
 instrumentation compilation, debug build, **22/22 emulator tests**, unsigned
 release compilation and Room schema upload all passed.
 
@@ -38,6 +38,6 @@ release compilation and Room schema upload all passed.
 
 - `CODE_AUDIT_REPORT.md` παραμένει αμετάβλητο και το commit/blob του συμφωνούν με το baseline.
 - Το `applicationId` παραμένει `com.angel.personalfolder`, `versionName` `2.0.1` και `versionCode` `3`. Η αλλαγή έκδοσης μετατέθηκε σκόπιμα μέχρι να υπάρχει πραγματικό signing identity.
-- Το CI #106 δημιούργησε unsigned/debug artifacts και schemas. Δεν έγινε δοκιμή σε φυσική συσκευή, πραγματικό in-place APK update ή validation του μόνιμου certificate.
+- Το CI #107 δημιούργησε unsigned/debug artifacts και schemas. Το debug artifact ZIP έχει ID `9188488015` και digest `sha256:1704315f5fe66eb4691e853803d13cd2a42587f60e3b64b0b53556997cfb1c8c`. Δεν έγινε δοκιμή σε φυσική συσκευή, πραγματικό in-place APK update ή validation του μόνιμου certificate.
 - Δεν υπάρχει τελικό signed APK ή σύνδεσμος APK, επειδή το μόνιμο signing key/certificate δεν είναι διαθέσιμο και δεν επιτρέπεται να παρουσιαστεί debug/unsigned artifact ως συμβατή ενημέρωση.
 - Τοπικά `git diff --check` περνά. Τοπικό `./gradlew --version` έχει επαληθεύσει τον pinned wrapper, αλλά τοπικές Gradle εργασίες που χρειάζονται plugin repositories μπλοκάρονται από το διαθέσιμο περιβάλλον· τα αντίστοιχα CI builds πέρασαν.
