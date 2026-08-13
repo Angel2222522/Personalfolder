@@ -8,13 +8,34 @@ import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
+private const val DOCUMENT_SUMMARY_COLUMNS = """
+    id, title, originalFileName, mimeType, encryptedPath, pageCount,
+    category, tags, provider, issuedDate, expiryDate, protocolNumber,
+    processingState, processingError, metadataManuallyEdited,
+    expiryDateSuggestion, expiryDateSuggestionConfidence,
+    titleConfidence, categoryConfidence, providerConfidence,
+    issuedDateConfidence, expiryDateConfidence, protocolNumberConfidence,
+    titleManuallyEdited, categoryManuallyEdited, providerManuallyEdited,
+    issuedDateManuallyEdited, expiryDateManuallyEdited,
+    protocolNumberManuallyEdited, createdAt, updatedAt
+"""
+
 @Dao
 interface DocumentDao {
-    @Query("SELECT * FROM documents ORDER BY updatedAt DESC")
-    fun observeAll(): Flow<List<DocumentEntity>>
+    @Query("SELECT $DOCUMENT_SUMMARY_COLUMNS FROM documents ORDER BY updatedAt DESC")
+    fun observeAll(): Flow<List<DocumentSummary>>
 
     @Query("""
-        SELECT d.* FROM documents AS d
+        SELECT d.id, d.title, d.originalFileName, d.mimeType, d.encryptedPath, d.pageCount,
+            d.category, d.tags, d.provider, d.issuedDate, d.expiryDate, d.protocolNumber,
+            d.processingState, d.processingError, d.metadataManuallyEdited,
+            d.expiryDateSuggestion, d.expiryDateSuggestionConfidence,
+            d.titleConfidence, d.categoryConfidence, d.providerConfidence,
+            d.issuedDateConfidence, d.expiryDateConfidence, d.protocolNumberConfidence,
+            d.titleManuallyEdited, d.categoryManuallyEdited, d.providerManuallyEdited,
+            d.issuedDateManuallyEdited, d.expiryDateManuallyEdited,
+            d.protocolNumberManuallyEdited, d.createdAt, d.updatedAt
+        FROM documents AS d
         WHERE (:ftsQuery = '' OR d.id IN (
             SELECT documentId FROM documents_fts WHERE documents_fts MATCH :ftsQuery
         ))
@@ -36,16 +57,37 @@ interface DocumentDao {
         caseId: String?,
         today: String,
         expiryBefore: String?
-    ): Flow<List<DocumentEntity>>
+    ): Flow<List<DocumentSummary>>
 
     @Query("SELECT * FROM documents WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): DocumentEntity?
 
-    @Query("SELECT * FROM documents WHERE expiryDate IS NOT NULL ORDER BY expiryDate ASC")
-    fun observeExpiring(): Flow<List<DocumentEntity>>
+    @Query("SELECT * FROM documents WHERE id = :id LIMIT 1")
+    fun observeById(id: String): Flow<DocumentEntity?>
+
+    @Query("SELECT $DOCUMENT_SUMMARY_COLUMNS FROM documents WHERE expiryDate IS NOT NULL ORDER BY expiryDate ASC")
+    fun observeExpiring(): Flow<List<DocumentSummary>>
 
     @Query("SELECT * FROM documents")
     suspend fun getAll(): List<DocumentEntity>
+
+    @Query("SELECT id FROM documents")
+    suspend fun getAllIds(): List<String>
+
+    @Query("SELECT encryptedPath FROM documents")
+    suspend fun getAllEncryptedPaths(): List<String>
+
+    @Query("SELECT COUNT(*) FROM documents")
+    suspend fun count(): Int
+
+    @Query("SELECT COALESCE(SUM(pageCount), 0) FROM documents")
+    suspend fun totalLogicalPageCount(): Long
+
+    @Query("SELECT COALESCE(SUM(LENGTH(ocrText)), 0) FROM documents")
+    suspend fun totalDocumentOcrChars(): Long
+
+    @Query("SELECT * FROM documents WHERE processingState = :state")
+    suspend fun getByProcessingState(state: String): List<DocumentEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(document: DocumentEntity)
@@ -71,6 +113,15 @@ interface DocumentPageDao {
     @Query("SELECT * FROM document_pages")
     suspend fun getAll(): List<DocumentPageEntity>
 
+    @Query("SELECT COUNT(*) FROM document_pages")
+    suspend fun count(): Int
+
+    @Query("SELECT COALESCE(SUM(LENGTH(ocrText)), 0) FROM document_pages")
+    suspend fun totalOcrChars(): Long
+
+    @Query("SELECT encryptedPath FROM document_pages")
+    suspend fun getAllEncryptedPaths(): List<String>
+
     @Query("SELECT * FROM document_pages WHERE documentId = :documentId ORDER BY pageIndex ASC")
     suspend fun getForDocumentOrdered(documentId: String): List<DocumentPageEntity>
 
@@ -79,6 +130,9 @@ interface DocumentPageDao {
 
     @Query("UPDATE document_pages SET ocrText = :ocrText WHERE documentId = :documentId AND pageIndex = :pageIndex")
     suspend fun updateOcr(documentId: String, pageIndex: Int, ocrText: String)
+
+    @Query("UPDATE document_pages SET ocrText = '' WHERE documentId = :documentId")
+    suspend fun clearOcrForDocument(documentId: String)
 
     @Query("DELETE FROM document_pages WHERE documentId = :documentId")
     suspend fun deleteForDocument(documentId: String)
@@ -97,6 +151,9 @@ interface CaseDao {
 
     @Query("SELECT * FROM cases")
     suspend fun getAll(): List<CaseEntity>
+
+    @Query("SELECT COUNT(*) FROM cases")
+    suspend fun count(): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(caseEntity: CaseEntity)
@@ -136,8 +193,22 @@ interface CaseDocumentDao {
     @Query("SELECT * FROM case_documents")
     suspend fun getAll(): List<CaseDocumentCrossRef>
 
-    @Query("SELECT documents.* FROM documents INNER JOIN case_documents ON documents.id = case_documents.documentId WHERE case_documents.caseId = :caseId ORDER BY documents.updatedAt DESC")
-    fun observeDocumentsForCase(caseId: String): Flow<List<DocumentEntity>>
+    @Query("""
+        SELECT d.id, d.title, d.originalFileName, d.mimeType, d.encryptedPath, d.pageCount,
+            d.category, d.tags, d.provider, d.issuedDate, d.expiryDate, d.protocolNumber,
+            d.processingState, d.processingError, d.metadataManuallyEdited,
+            d.expiryDateSuggestion, d.expiryDateSuggestionConfidence,
+            d.titleConfidence, d.categoryConfidence, d.providerConfidence,
+            d.issuedDateConfidence, d.expiryDateConfidence, d.protocolNumberConfidence,
+            d.titleManuallyEdited, d.categoryManuallyEdited, d.providerManuallyEdited,
+            d.issuedDateManuallyEdited, d.expiryDateManuallyEdited,
+            d.protocolNumberManuallyEdited, d.createdAt, d.updatedAt
+        FROM documents AS d
+        INNER JOIN case_documents ON d.id = case_documents.documentId
+        WHERE case_documents.caseId = :caseId
+        ORDER BY d.updatedAt DESC
+    """)
+    fun observeDocumentsForCase(caseId: String): Flow<List<DocumentSummary>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(relation: CaseDocumentCrossRef)
@@ -160,6 +231,9 @@ interface TimelineDao {
     @Query("SELECT * FROM timeline_events")
     suspend fun getAll(): List<TimelineEventEntity>
 
+    @Query("SELECT COUNT(*) FROM timeline_events")
+    suspend fun count(): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(event: TimelineEventEntity)
 
@@ -177,6 +251,9 @@ interface ChecklistDao {
 
     @Query("SELECT * FROM checklist_items")
     suspend fun getAll(): List<ChecklistItemEntity>
+
+    @Query("SELECT COUNT(*) FROM checklist_items")
+    suspend fun count(): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(item: ChecklistItemEntity)
@@ -204,6 +281,9 @@ interface ReminderDao {
 
     @Query("SELECT * FROM reminders")
     suspend fun getAll(): List<ReminderEntity>
+
+    @Query("SELECT COUNT(*) FROM reminders")
+    suspend fun count(): Int
 
     @Query("SELECT * FROM reminders WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): ReminderEntity?

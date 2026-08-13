@@ -6,6 +6,7 @@ import androidx.room.migration.Migration
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
+import java.security.MessageDigest
 
 @Database(
     entities = [
@@ -308,37 +309,88 @@ abstract class AppDatabase : RoomDatabase() {
                     VALUES (new.id, new.title, new.originalFileName, new.ocrText, new.provider, new.category, new.tags, new.protocolNumber);
                 END
             """.trimIndent())
-            val count = database.query("SELECT COUNT(*) FROM documents_fts").use { cursor ->
-                if (cursor.moveToFirst()) cursor.getLong(0) else 0L
-            }
-            val documents = database.query("SELECT id, title, originalFileName, ocrText, provider, category, tags, protocolNumber FROM documents").use { cursor ->
-                buildList {
-                    while (cursor.moveToNext()) {
-                        add(arrayOf(
-                            cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getString(3),
-                            cursor.getString(4), cursor.getString(5), cursor.getString(6),
-                            if (cursor.isNull(7)) null else cursor.getString(7)
-                        ))
-                    }
-                }
-            }
-            val ftsIds = database.query("SELECT documentId FROM documents_fts").use { cursor ->
-                buildSet {
-                    while (cursor.moveToNext()) add(cursor.getString(0))
-                }
-            }
-            val documentIds = documents.mapNotNull { it[0] as? String }.toSet()
-            if (FtsRepairPolicy.requiresRebuild(documents.size, count, documentIds, ftsIds)) {
+            // Inspect one cursor row at a time. The old implementation loaded
+            // every OCR string into a List<Array<...>> on every database open.
+            val documents = inspectSearchRows(database, "documents", "id")
+            val fts = inspectSearchRows(database, "documents_fts", "documentId")
+            if (FtsRepairPolicy.requiresRebuild(
+                    documents.count.toInt(),
+                    fts.count,
+                    documents.ids,
+                    fts.ids,
+                    documents.contentFingerprint,
+                    fts.contentFingerprint
+                )
+            ) {
                 database.execSQL("DELETE FROM documents_fts")
                 val statement = database.compileStatement(
                     "INSERT INTO documents_fts(documentId, title, originalFileName, ocrText, provider, category, tags, protocolNumber) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
                 )
-                documents.forEach { values ->
+                database.query("SELECT id, title, originalFileName, ocrText, provider, category, tags, protocolNumber FROM documents ORDER BY id").use { cursor ->
+                    while (cursor.moveToNext()) {
                     statement.clearBindings()
-                    values.forEachIndexed { index, value -> if (value == null) statement.bindNull(index + 1) else statement.bindString(index + 1, value as String) }
+                    for (index in 0 until 7) statement.bindString(index + 1, cursor.getString(index))
+                    if (cursor.isNull(7)) statement.bindNull(8) else statement.bindString(8, cursor.getString(7))
                     statement.executeInsert()
+                    }
                 }
             }
+        }
+
+        private data class SearchRows(
+            val count: Long,
+            val ids: Set<String>,
+            val contentFingerprint: String
+        )
+
+        private fun inspectSearchRows(
+            database: SupportSQLiteDatabase,
+            table: String,
+            idColumn: String
+        ): SearchRows {
+            val digest = MessageDigest.getInstance("SHA-256")
+            val ids = mutableSetOf<String>()
+            var count = 0L
+            val query = "SELECT $idColumn, title, originalFileName, ocrText, provider, category, tags, protocolNumber FROM $table ORDER BY $idColumn"
+            database.query(query).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val row = SearchIndexRow(
+                        documentId = cursor.getString(0),
+                        title = cursor.getString(1),
+                        originalFileName = cursor.getString(2),
+                        ocrText = cursor.getString(3),
+                        provider = cursor.getString(4),
+                        category = cursor.getString(5),
+                        tags = cursor.getString(6),
+                        protocolNumber = if (cursor.isNull(7)) null else cursor.getString(7)
+                    )
+                    ids += row.documentId
+                    count++
+                    updateSearchDigest(digest, row)
+                }
+            }
+            return SearchRows(
+                count = count,
+                ids = ids,
+                contentFingerprint = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            )
+        }
+
+        private fun updateSearchDigest(digest: MessageDigest, row: SearchIndexRow) {
+            fun update(value: String?) {
+                val bytes = (value ?: "<null>").toByteArray(Charsets.UTF_8)
+                digest.update(bytes.size.toString().toByteArray(Charsets.US_ASCII))
+                digest.update(':'.code.toByte())
+                digest.update(bytes)
+            }
+            update(row.documentId)
+            update(row.title)
+            update(row.originalFileName)
+            update(row.ocrText)
+            update(row.provider)
+            update(row.category)
+            update(row.tags)
+            update(row.protocolNumber)
         }
 
         private fun requireNoLegacyOrphans(database: SupportSQLiteDatabase) {
@@ -346,7 +398,10 @@ abstract class AppDatabase : RoomDatabase() {
                 "SELECT COUNT(*) FROM document_pages p LEFT JOIN documents d ON d.id = p.documentId WHERE d.id IS NULL" to "document pages",
                 "SELECT COUNT(*) FROM case_documents r LEFT JOIN cases c ON c.id = r.caseId LEFT JOIN documents d ON d.id = r.documentId WHERE c.id IS NULL OR d.id IS NULL" to "case-document relations",
                 "SELECT COUNT(*) FROM timeline_events e LEFT JOIN cases c ON c.id = e.caseId WHERE c.id IS NULL" to "timeline events",
-                "SELECT COUNT(*) FROM checklist_items i LEFT JOIN cases c ON c.id = i.caseId WHERE c.id IS NULL" to "checklist items"
+                "SELECT COUNT(*) FROM checklist_items i LEFT JOIN cases c ON c.id = i.caseId WHERE c.id IS NULL" to "checklist items",
+                "SELECT COUNT(*) FROM checklist_items i LEFT JOIN documents d ON d.id = i.linkedDocumentId WHERE i.linkedDocumentId IS NOT NULL AND d.id IS NULL" to "checklist document links",
+                "SELECT COUNT(*) FROM reminders r LEFT JOIN documents d ON d.id = r.documentId WHERE r.documentId IS NOT NULL AND d.id IS NULL" to "reminder document links",
+                "SELECT COUNT(*) FROM reminders r LEFT JOIN cases c ON c.id = r.caseId WHERE r.caseId IS NOT NULL AND c.id IS NULL" to "reminder case links"
             )
             checks.forEach { (query, label) ->
                 database.query(query).use { cursor ->

@@ -1,0 +1,73 @@
+package com.angel.personalfolder.data
+
+/**
+ * Lightweight document projection for lists, filters and case pickers.
+ * OCR text and the extracted metadata JSON are intentionally excluded.
+ */
+data class DocumentSummary(
+    val id: String,
+    val title: String,
+    val originalFileName: String,
+    val mimeType: String,
+    val encryptedPath: String,
+    val pageCount: Int,
+    val category: String,
+    val tags: String,
+    val provider: String,
+    val issuedDate: String?,
+    val expiryDate: String?,
+    val protocolNumber: String?,
+    val processingState: String,
+    val processingError: String?,
+    val metadataManuallyEdited: Boolean,
+    val expiryDateSuggestion: String?,
+    val expiryDateSuggestionConfidence: String,
+    val titleConfidence: String,
+    val categoryConfidence: String,
+    val providerConfidence: String,
+    val issuedDateConfidence: String,
+    val expiryDateConfidence: String,
+    val protocolNumberConfidence: String,
+    val titleManuallyEdited: Boolean,
+    val categoryManuallyEdited: Boolean,
+    val providerManuallyEdited: Boolean,
+    val issuedDateManuallyEdited: Boolean,
+    val expiryDateManuallyEdited: Boolean,
+    val protocolNumberManuallyEdited: Boolean,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+fun DocumentEntity.toSummary(): DocumentSummary = DocumentSummary(
+    id = id,
+    title = title,
+    originalFileName = originalFileName,
+    mimeType = mimeType,
+    encryptedPath = encryptedPath,
+    pageCount = pageCount,
+    category = category,
+    tags = tags,
+    provider = provider,
+    issuedDate = issuedDate,
+    expiryDate = expiryDate,
+    protocolNumber = protocolNumber,
+    processingState = processingState,
+    processingError = processingError,
+    metadataManuallyEdited = metadataManuallyEdited,
+    expiryDateSuggestion = expiryDateSuggestion,
+    expiryDateSuggestionConfidence = expiryDateSuggestionConfidence,
+    titleConfidence = titleConfidence,
+    categoryConfidence = categoryConfidence,
+    providerConfidence = providerConfidence,
+    issuedDateConfidence = issuedDateConfidence,
+    expiryDateConfidence = expiryDateConfidence,
+    protocolNumberConfidence = protocolNumberConfidence,
+    titleManuallyEdited = titleManuallyEdited,
+    categoryManuallyEdited = categoryManuallyEdited,
+    providerManuallyEdited = providerManuallyEdited,
+    issuedDateManuallyEdited = issuedDateManuallyEdited,
+    expiryDateManuallyEdited = expiryDateManuallyEdited,
+    protocolNumberManuallyEdited = protocolNumberManuallyEdited,
+    createdAt = createdAt,
+    updatedAt = updatedAt
+)
