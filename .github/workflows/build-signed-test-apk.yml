@@ -1,4 +1,4 @@
-name: Build signed Personal Folder test APK
+name: Build Personal Folder test APK
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 jobs:
-  build-signed-apk:
+  build-test-apk:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -37,34 +37,12 @@ jobs:
       - name: Install build SDK only
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Prepare permanent release signing
-        env:
-          KEYSTORE_BASE64: ${{ secrets.PERSONAL_FOLDER_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.PERSONAL_FOLDER_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.PERSONAL_FOLDER_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.PERSONAL_FOLDER_KEY_PASSWORD }}
-        run: ./scripts/prepare-signing.sh
+      - name: Build debug APK from current remediation branch
+        run: gradle assembleDebug
 
-      - name: Build signed release APK
-        run: gradle assembleRelease
-
-      - name: Verify permanent release signature
-        run: |
-          set -euo pipefail
-          APK=$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | head -n 1)
-          test -n "$APK"
-          if [[ "$(basename "$APK")" == *unsigned* ]]; then
-            echo "Release APK is unsigned."
-            exit 1
-          fi
-          apksigner verify --verbose --print-certs "$APK"
-          EXPECTED_SHA256="2642FD5E5E43A90EB6DA7B3462E14313BE9DA8C479ECAABC404076071F0A049B"
-          APK_SHA256=$(apksigner verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr -d ':' | tr '[:lower:]' '[:upper:]')
-          test "$APK_SHA256" = "$EXPECTED_SHA256"
-
-      - name: Upload signed test APK
+      - name: Upload test APK
         uses: actions/upload-artifact@v4
         with:
-          name: PersonalFolder-v2.0.1-signed-test
-          path: app/build/outputs/apk/release/*.apk
+          name: PersonalFolder-v2.0.1-ocrfix-test
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
