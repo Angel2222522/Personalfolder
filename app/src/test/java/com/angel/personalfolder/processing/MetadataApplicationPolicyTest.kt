@@ -30,6 +30,26 @@ class MetadataApplicationPolicyTest {
     }
 
     @Test
+    fun applicationDoesNotAdoptExpiryOfReferencedPermit() {
+        val metadata = MetadataExtractor.extract(
+            "ΑΙΤΗΣΗ - ΑΝΑΦΟΡΑ\nΥφιστάμενη άδεια διαμονής - Λήξη: 31/12/2030",
+            "fallback"
+        )
+
+        // The extractor is allowed to surface raw evidence, but the application
+        // policy must not persist a referenced permit date as the application's
+        // own expiry.
+        assertEquals("2030-12-31", metadata.expiryDate)
+
+        val updated = MetadataApplicationPolicy.apply(baseDocument, metadata)
+
+        assertNull(updated.expiryDate)
+        assertNull(updated.expiryDateSuggestion)
+        assertEquals(MetadataConfidence.NONE, updated.expiryDateConfidence)
+        assertEquals(MetadataConfidence.NONE, updated.expiryDateSuggestionConfidence)
+    }
+
+    @Test
     fun extractedTitleIsAppliedWhenTitleIsNotManuallyOwned() {
         val metadata = MetadataExtractor.extract("Βεβαίωση κατοικίας", "fallback")
 
