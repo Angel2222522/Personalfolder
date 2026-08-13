@@ -1,6 +1,7 @@
 package com.angel.personalfolder.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
@@ -29,5 +30,15 @@ class ReminderDeliveryPolicyTest {
         assertTrue(ReminderDeliveryPolicy.initialDelayMs(Long.MAX_VALUE, 0L) > 0L)
         assertEquals(Long.MAX_VALUE, ReminderDeliveryPolicy.initialDelayMs(Long.MAX_VALUE, Long.MIN_VALUE))
         assertEquals(0L, ReminderDeliveryPolicy.initialDelayMs(Long.MIN_VALUE, 0L))
+    }
+
+    @Test
+    fun completedAndArchivedCasesDoNotScheduleReminders() {
+        assertFalse(ReminderScheduler.shouldScheduleForCase(CaseStatus.COMPLETED))
+        assertFalse(ReminderScheduler.shouldScheduleForCase(CaseStatus.ARCHIVED))
+        assertTrue(ReminderScheduler.shouldScheduleForCase(CaseStatus.NEW))
+        assertTrue(ReminderScheduler.shouldScheduleForCase(CaseStatus.IN_PROGRESS))
+        assertTrue(ReminderScheduler.shouldScheduleForCase(CaseStatus.WAITING))
+        assertTrue(ReminderScheduler.shouldScheduleForCase(CaseStatus.ACTION))
     }
 }
