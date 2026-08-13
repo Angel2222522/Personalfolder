@@ -47,6 +47,29 @@ class OcrTextPostProcessorTest {
     }
 
     @Test
+    fun nativePdfTextJoinsSplitSchoolOrdinalAndJoinedSchoolType() {
+        val input = """
+            ΕΛΛΗΝΙΚΗ ΔΗΜΟΚΡΑΤΙΑ
+            8
+            ο ΔΗΜΟΤΙΚΟΣΧΟΛΕΙΟ ΔΟΚΙΜΗΣ
+            Αριθ.Πρωτ.117
+            Ημερομηνία: 09/03/2026
+            ΒΕΒΑΙΩΣΗ ΦΟΙΤΗΣΗΣ
+        """.trimIndent()
+
+        val normalized = OcrTextPostProcessor.normalizeNativePdfText(input)
+
+        assertTrue(normalized.contains("8ο ΔΗΜΟΤΙΚΟ ΣΧΟΛΕΙΟ ΔΟΚΙΜΗΣ"))
+        val metadata = MetadataEvidenceRefiner.refine(
+            MetadataExtractor.extract(normalized, "synthetic-school.pdf"),
+            normalized
+        )
+        assertEquals("8ο ΔΗΜΟΤΙΚΟ ΣΧΟΛΕΙΟ ΔΟΚΙΜΗΣ", metadata.provider)
+        assertEquals("117", metadata.protocolNumber)
+        assertEquals("2026-03-09", metadata.issuedDate)
+    }
+
+    @Test
     fun doesNotRewritePureEnglishTokens() {
         val input = "RESIDENCE PERMIT API ID"
 

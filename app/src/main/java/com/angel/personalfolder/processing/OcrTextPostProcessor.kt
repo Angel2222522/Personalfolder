@@ -29,10 +29,11 @@ object OcrTextPostProcessor {
         'Z' to 'Ζ'
     )
 
-    fun normalizeNativePdfText(text: String): String = normalizeUnicodeAndWhitespace(text)
+    fun normalizeNativePdfText(text: String): String =
+        repairSchoolLayout(normalizeUnicodeAndWhitespace(text))
 
     fun normalizeOcrText(text: String): String {
-        val normalized = normalizeUnicodeAndWhitespace(text)
+        val normalized = repairSchoolLayout(normalizeUnicodeAndWhitespace(text))
         val scriptRepaired = MIXED_TOKEN.replace(normalized) { match -> repairMixedGreekToken(match.value) }
         return repairKnownAdministrativeOcrPatterns(scriptRepaired)
     }
@@ -111,6 +112,27 @@ object OcrTextPostProcessor {
             .trim()
     }
 
+    private fun repairSchoolLayout(text: String): String {
+        var repaired = SCHOOL_TYPE_JOINED.replace(text) { match ->
+            "${match.groupValues[1]} ${match.groupValues[2]}"
+        }
+
+        // Native PDF extraction may split a visual ordinal such as "8ο" into
+        // two text items/lines. Joining this very narrow school-heading shape is
+        // faithful layout repair and lets issuer extraction prefer the school
+        // over a generic ministry header.
+        repaired = SPLIT_SCHOOL_ORDINAL.replace(repaired) { match ->
+            "${match.groupValues[1]}ο "
+        }
+
+        // OCR often reads the Greek ordinal omicron after a school number as a
+        // degree/quote symbol. This rule is intentionally limited to school types.
+        repaired = SCHOOL_ORDINAL.replace(repaired) { match ->
+            "${match.groupValues[1]}ο ${match.groupValues[2]}"
+        }
+        return repaired
+    }
+
     private fun repairMixedGreekToken(token: String): String {
         val greekCount = token.count(::isGreekLetter)
         if (greekCount == 0) return token
@@ -129,12 +151,6 @@ object OcrTextPostProcessor {
 
     private fun repairKnownAdministrativeOcrPatterns(text: String): String {
         var repaired = GREEK_REPUBLIC_HEADING.replace(text, "ΕΛΛΗΝΙΚΗ ΔΗΜΟΚΡΑΤΙΑ")
-
-        // OCR often reads the Greek ordinal omicron after a school number as a
-        // degree/quote symbol. This rule is intentionally limited to school types.
-        repaired = SCHOOL_ORDINAL.replace(repaired) { match ->
-            "${match.groupValues[1]}ο ${match.groupValues[2]}"
-        }
 
         // These are recurring OCR transliterations of standard Greek field words,
         // not document-specific names or values. Exact-token replacement avoids
@@ -182,6 +198,14 @@ object OcrTextPostProcessor {
 
     private val GREEK_REPUBLIC_HEADING = Regex(
         """\b(?:EAAHNIKH|ΕΑΛΗΝΙΚΗ|ΕΛΛΗΝΙΚΗ)\s+(?:AHMOKPATIA|ΑΗΜΟΚΡΑΤΙΑ|ΔΗΜΟΚΡΑΤΙΑ)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val SCHOOL_TYPE_JOINED = Regex(
+        """\b(Δημοτικό)(Σχολείο)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val SPLIT_SCHOOL_ORDINAL = Regex(
+        """(?m)^(\d{1,3})\s*\n\s*[οo0]\s+(?=(?:Γυμνάσιο|Λύκειο|Δημοτικό)\b)""",
         RegexOption.IGNORE_CASE
     )
     private val SCHOOL_ORDINAL = Regex(
