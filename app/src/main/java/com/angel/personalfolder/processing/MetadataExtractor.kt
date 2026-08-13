@@ -132,11 +132,18 @@ object MetadataExtractor {
      */
     fun extract(text: String, fallbackTitle: String, supplementalText: String = ""): ExtractedMetadata {
         val primaryText = text.replace("\u0000", " ").trim()
+
+        // Metadata describes the document itself, not every attachment that may
+        // be concatenated behind it. Bound extraction to the leading evidence so
+        // a long dossier cannot inherit a category, protocol or date from a late
+        // supporting document. The full OCR body remains stored/searchable.
+        val metadataPrimaryText = primaryText.take(MAX_METADATA_EVIDENCE_CHARS)
+        val metadataSupplementalText = supplementalText.replace("\u0000", " ").trim().take(MAX_METADATA_EVIDENCE_CHARS)
         val evidenceText = buildString {
-            append(primaryText)
-            if (supplementalText.isNotBlank()) {
+            append(metadataPrimaryText)
+            if (metadataSupplementalText.isNotBlank()) {
                 if (isNotEmpty()) append('\n')
-                append(supplementalText.replace("\u0000", " ").trim())
+                append(metadataSupplementalText)
             }
         }
         val lines = evidenceText.lines().map(String::trim).filter { it.length >= 3 }
@@ -159,7 +166,7 @@ object MetadataExtractor {
             lines.isEmpty() -> MetadataConfidence.UNKNOWN
             else -> MetadataConfidence.LOW
         }
-        val folded = foldGreek(primaryText)
+        val folded = foldGreek(metadataPrimaryText)
 
         val categoryCandidate = categoryRules.mapNotNull { rule ->
             val matches = rule.terms.map { term ->
@@ -238,10 +245,9 @@ object MetadataExtractor {
         val issuedProvenance = issuedCandidate?.let { "issued-${it.issuedSource}:${it.issuedScore}" } ?: "none"
         val expiryProvenance = expiryCandidate?.let { "expiry-keyword:${it.expiryScore}" } ?: "none"
 
-        // Protocol values are matched against the original evidence so their
-        // Greek letters/case are preserved. Sparse OCR is especially useful when
-        // normal layout segmentation joins a preceding postal/address field onto
-        // the same line as "Αριθμ. Πρωτ.".
+        // Protocol values are matched against the original bounded evidence so
+        // their Greek letters/case are preserved. Late supporting attachments are
+        // deliberately outside this scope.
         val protocolMatch = protocolRegex.find(evidenceText)
         val protocol = protocolMatch?.groupValues?.getOrNull(1)?.let(::normalizeProtocol)
         val protocolConfidence = if (protocol == null) MetadataConfidence.NONE else MetadataConfidence.HIGH
@@ -484,4 +490,5 @@ object MetadataExtractor {
     private const val REGULAR_KEYWORD_SCORE = 4
     private const val DATELINE_SCORE = 3
     private const val LABEL_CONTEXT_LIMIT = 120
+    private const val MAX_METADATA_EVIDENCE_CHARS = 16_000
 }
