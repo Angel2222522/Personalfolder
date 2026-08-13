@@ -8,7 +8,6 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.angel.personalfolder.workers.ReminderWorker
 import java.time.LocalDate
-import java.time.ZoneId
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -23,10 +22,10 @@ object ReminderScheduler {
             ReminderEntity(
                 id = UUID.randomUUID().toString(),
                 title = "Λήξη: ${title.ifBlank { "Έγγραφο" }}",
-                dueAt = validDate.minusDays(lead.toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+                dueAt = ReminderDatePolicy.dueAt(validDate, lead),
                 documentId = documentId,
                 leadDays = lead,
-                deadlineAt = validDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                deadlineAt = ReminderDatePolicy.deadlineAt(validDate)
             )
         } } ?: emptyList()
         val old = withDatabaseCommit(database) {
@@ -52,10 +51,10 @@ object ReminderScheduler {
             ReminderEntity(
                 id = UUID.randomUUID().toString(),
                 title = "Προθεσμία υπόθεσης: ${title.ifBlank { "Υπόθεση" }}",
-                dueAt = validDate.minusDays(lead.toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+                dueAt = ReminderDatePolicy.dueAt(validDate, lead),
                 caseId = caseId,
                 leadDays = lead,
-                deadlineAt = validDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                deadlineAt = ReminderDatePolicy.deadlineAt(validDate)
             )
         } } ?: emptyList()
         val old = withDatabaseCommit(database) {
