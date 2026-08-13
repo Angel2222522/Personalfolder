@@ -201,15 +201,15 @@ object OcrTextPostProcessor {
         RegexOption.IGNORE_CASE
     )
     private val SCHOOL_TYPE_JOINED = Regex(
-        """\b(Δημοτικό)(Σχολείο)\b""",
+        """(?<![\p{L}\p{M}])(Δημοτικ[όο])(Σχολε[ίι]ο)(?![\p{L}\p{M}])""",
         RegexOption.IGNORE_CASE
     )
     private val SPLIT_SCHOOL_ORDINAL = Regex(
-        """(?m)^(\d{1,3})\s*\n\s*[οo0]\s+(?=(?:Γυμνάσιο|Λύκειο|Δημοτικό)\b)""",
+        """(?m)^(\d{1,3})[ \t]*\n[ \t]*[οo0][ \t]+(?=(?:Γυμν[άα]σιο|Λ[ύυ]κειο|Δημοτικ[όο])(?![\p{L}\p{M}]))""",
         RegexOption.IGNORE_CASE
     )
     private val SCHOOL_ORDINAL = Regex(
-        """\b(\d{1,3})\s*[°º”″\"]\s*(Γυμνάσιο|Λύκειο|Δημοτικό)\b""",
+        """(?<!\d)(\d{1,3})[ \t]*[°º”″\"][ \t]*(Γυμν[άα]σιο|Λ[ύυ]κειο|Δημοτικ[όο])(?![\p{L}\p{M}])""",
         RegexOption.IGNORE_CASE
     )
     private val ADMIN_FIELD_CORRECTIONS = listOf(
